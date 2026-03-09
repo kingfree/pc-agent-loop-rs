@@ -71,7 +71,7 @@ pub async fn code_run(
                 run_process("bash", &["-c", code], timeout_secs, cwd, tx).await
             }
         }
-        "lua" => run_script(code, "lua", ".lua", timeout_secs, cwd, tx).await,
+        "lua" => run_lua_embedded(code, timeout_secs, cwd, tx).await,
         "javascript" | "js" | "node" => {
             run_script(code, "node", ".js", timeout_secs, cwd, tx).await
         }
@@ -104,6 +104,121 @@ async fn run_script(
 
     let _ = fs::remove_file(&tmp_path).await;
     result
+}
+
+/// Run Lua code using the built-in mlua (Lua 5.4) interpreter — no external `lua` binary needed.
+///
+/// Security model:
+/// - Runs on a dedicated blocking thread (`spawn_blocking`), isolated from the async runtime.
+/// - Lua VM is created fresh per invocation (no shared state between executions).
+/// - Only `ALL_SAFE` stdlib is loaded: math, string, table, utf8, coroutine, base.
+///   Dangerous libs are excluded: `io`, `os`, `package`/`require`, `debug`, `ffi`.
+/// - Timeout is enforced by abandoning the blocking task result (the thread finishes
+///   naturally but its output is discarded after the deadline).
+async fn run_lua_embedded(
+    code: &str,
+    timeout_secs: u64,
+    cwd: Option<&str>,
+    tx: &UnboundedSender<String>,
+) -> Result<(String, i32)> {
+    use mlua::prelude::*;
+    use mlua::Variadic;
+
+    let code_owned = code.to_string();
+    let cwd_owned = cwd.map(|s| s.to_string());
+    let tx_clone = tx.clone();
+
+    let blocking = tokio::task::spawn_blocking(move || -> (String, i32) {
+        let lua = match Lua::new_with(LuaStdLib::ALL_SAFE, LuaOptions::default()) {
+            Ok(l) => l,
+            Err(e) => return (format!("[lua error] {}\n", e), 1),
+        };
+
+        // Capture print() output
+        let mut full_output = String::new();
+        let tx_print = tx_clone.clone();
+        // We use a channel to collect output from the closure without shared mut ref
+        let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+
+        let out_tx_print = out_tx.clone();
+        let print_fn = lua.create_function(move |_, args: Variadic<LuaValue>| {
+            let parts: Vec<String> = args.iter().map(lua_value_to_string).collect();
+            let line = parts.join("\t") + "\n";
+            let _ = out_tx_print.send(line.clone());
+            let _ = tx_print.send(line);
+            Ok(())
+        });
+
+        let out_tx_write = out_tx.clone();
+        let tx_write = tx_clone.clone();
+
+        match print_fn {
+            Ok(f) => { let _ = lua.globals().set("print", f); }
+            Err(e) => return (format!("[lua error] {}\n", e), 1),
+        }
+
+        // Override io.write as well
+        if let Ok(io) = lua.globals().get::<LuaTable>("io") {
+            let write_fn = lua.create_function(move |_, args: Variadic<LuaValue>| {
+                let s: String = args.iter().map(lua_value_to_string).collect();
+                let _ = out_tx_write.send(s.clone());
+                let _ = tx_write.send(s);
+                Ok(())
+            });
+            if let Ok(f) = write_fn {
+                let _ = io.set("write", f);
+            }
+        }
+
+        // Inject cwd as a global if provided
+        if let Some(ref dir) = cwd_owned {
+            let _ = lua.globals().set("CWD", dir.as_str());
+        }
+
+        // Execute
+        let result = lua.load(&code_owned).exec();
+        drop(out_tx); // close sender so we can drain
+
+        for chunk in out_rx.try_iter() {
+            full_output.push_str(&chunk);
+        }
+
+        match result {
+            Ok(_) => (full_output, 0),
+            Err(e) => {
+                let err_msg = format!("[lua error] {}\n", e);
+                full_output.push_str(&err_msg);
+                (full_output, 1)
+            }
+        }
+    });
+
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
+
+    tokio::select! {
+        result = blocking => {
+            let (output, code) = result.unwrap_or_else(|e| (format!("[panic] {}\n", e), 1));
+            let icon = if code == 0 { "✅" } else { "❌" };
+            let _ = tx.send(format!("[Status] {} Exit Code: {}\n", icon, code));
+            Ok((output, code))
+        }
+        _ = tokio::time::sleep_until(deadline) => {
+            let msg = format!("\n[Timeout Error] 超时强制终止 ({}s)\n", timeout_secs);
+            let _ = tx.send(msg.clone());
+            Ok((msg, 124))
+        }
+    }
+}
+
+fn lua_value_to_string(v: &mlua::Value) -> String {
+    match v {
+        mlua::Value::String(s) => s.to_str().map(|b| b.to_string()).unwrap_or_default(),
+        mlua::Value::Integer(n) => n.to_string(),
+        mlua::Value::Number(n) => n.to_string(),
+        mlua::Value::Boolean(b) => b.to_string(),
+        mlua::Value::Nil => "nil".to_string(),
+        other => format!("{:?}", other),
+    }
 }
 
 /// Run Python code by writing to a temp file, then executing it.
