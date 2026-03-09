@@ -1,0 +1,218 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Desktop: Linux, macOS, Windows ──────────────────────────────────────
+  build-desktop:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: pc-agent-loop
+            archive: pc-agent-loop-linux-x86_64.tar.gz
+
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            artifact: pc-agent-loop
+            archive: pc-agent-loop-linux-aarch64.tar.gz
+            cross: true
+
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: pc-agent-loop
+            archive: pc-agent-loop-macos-aarch64.tar.gz
+
+          - os: macos-14
+            target: x86_64-apple-darwin
+            artifact: pc-agent-loop
+            archive: pc-agent-loop-macos-x86_64.tar.gz
+
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            artifact: pc-agent-loop.exe
+            archive: pc-agent-loop-windows-x86_64.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux aarch64)
+        if: matrix.cross
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Set cross-compiler env (Linux aarch64)
+        if: matrix.cross
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Build CLI
+        run: >
+          cargo build --release --target ${{ matrix.target }}
+          -p pc-agent-loop
+
+      - name: Build GUI
+        # GUI builds on all desktop platforms
+        run: >
+          cargo build --release --target ${{ matrix.target }}
+          -p pc-agent-loop-gui
+        continue-on-error: true  # GUI might have extra deps; don't block release
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          STAGING="staging"
+          mkdir -p "$STAGING"
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact }} "$STAGING/"
+          # Include GUI binary if built
+          GUI_BIN="target/${{ matrix.target }}/release/pc-agent-loop-gui"
+          [ -f "$GUI_BIN" ] && cp "$GUI_BIN" "$STAGING/"
+          cp README.md LICENSE "$STAGING/"
+          tar -czf ${{ matrix.archive }} -C "$STAGING" .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $staging = "staging"
+          New-Item -ItemType Directory -Force $staging | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\${{ matrix.artifact }}" $staging
+          $gui = "target\${{ matrix.target }}\release\pc-agent-loop-gui.exe"
+          if (Test-Path $gui) { Copy-Item $gui $staging }
+          Copy-Item README.md, LICENSE $staging
+          Compress-Archive -Path "$staging\*" -DestinationPath ${{ matrix.archive }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  # ── Android: arm64-v8a, x86_64 ──────────────────────────────────────────
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: android-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: android-cargo-
+
+      - name: Build Android .so (arm64-v8a + x86_64)
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        run: |
+          cargo ndk \
+            -t arm64-v8a \
+            -t x86_64 \
+            -o jniLibs \
+            build --release -p pc-agent-loop-android
+
+      - name: Package Android
+        run: |
+          tar -czf pc-agent-loop-android-jniLibs.tar.gz jniLibs/
+          echo "Contents:"
+          find jniLibs -name "*.so"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pc-agent-loop-android-jniLibs.tar.gz
+          path: pc-agent-loop-android-jniLibs.tar.gz
+
+  # ── Create GitHub Release ────────────────────────────────────────────────
+  release:
+    name: Create Release
+    needs: [build-desktop, build-android]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          body: |
+            ## pc-agent-loop-rs ${{ github.ref_name }}
+
+            Prebuilt binaries for all platforms.
+
+            ### Downloads
+
+            | Platform | File |
+            |----------|------|
+            | Linux x86_64 | `pc-agent-loop-linux-x86_64.tar.gz` |
+            | Linux aarch64 | `pc-agent-loop-linux-aarch64.tar.gz` |
+            | macOS Apple Silicon | `pc-agent-loop-macos-aarch64.tar.gz` |
+            | macOS Intel | `pc-agent-loop-macos-x86_64.tar.gz` |
+            | Windows x86_64 | `pc-agent-loop-windows-x86_64.zip` |
+            | Android JNI (.so) | `pc-agent-loop-android-jniLibs.tar.gz` |
+
+            ### Quick Start
+            ```bash
+            # Extract and run (Linux/macOS)
+            tar -xzf pc-agent-loop-linux-x86_64.tar.gz
+            echo '{"oai_config":{"apikey":"sk-...","apibase":"https://api.openai.com","model":"gpt-4o"}}' > mykey.json
+            ./pc-agent-loop
+            ```
