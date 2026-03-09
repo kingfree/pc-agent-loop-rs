@@ -70,7 +70,7 @@ User instruction
            ↓
 ┌──────────────────────────┐
 │  7 Atomic Tools           │  ← All capabilities derive from these
-│  code_run                 │     Execute Python / Bash / PowerShell
+│  code_run                 │     Execute Python / Bash / Lua / JavaScript
 │  file_read                │     Read with line ranges & keyword search
 │  file_write               │     Overwrite / append / prepend
 │  file_patch               │     Surgical unique-match edits
@@ -95,7 +95,7 @@ The agent uses a **text-based tool protocol** (not native function calling), so 
 - `agent_loop` — Sense-Think-Act loop + `UnboundedSender<String>` streaming
 - `llm` — Multi-backend LLM client (OpenAI, Claude, Gemini), SSE streaming, auto-retry
 - `handler` — Tool dispatch + working-memory management + `<summary>` extraction
-- `tools` — `code_run`, `file_read`, `file_patch`, `file_write`
+- `tools` — `code_run` (Python / Bash / Lua / JavaScript), `file_read`, `file_patch`, `file_write`
 - `webdriver` — WebSocket + HTTP bridge to a real browser via Tampermonkey
 
 **Interfaces**:
@@ -391,7 +391,7 @@ cargo run --release -p pc-agent-loop-gui -- --open
 - `agent_loop` — 感知-思考-行动循环，流式输出通道
 - `llm` — 多后端 LLM（OpenAI、Claude、Gemini），SSE 流式，自动重试
 - `handler` — 工具分发 + 工作记忆 + `<summary>` 提取
-- `tools` — `code_run`、`file_read`、`file_patch`、`file_write`
+- `tools` — `code_run`（支持 Python/Bash/Lua/JavaScript）、`file_read`、`file_patch`、`file_write`
 - `webdriver` — 通过 Tampermonkey 注入真实浏览器的 WebSocket+HTTP 桥接
 
 **交互界面**：

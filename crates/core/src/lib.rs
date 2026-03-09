@@ -56,14 +56,18 @@ fn load_global_memory_str(work_dir: &str) -> String {
 /// Full tools schema matching the Python original (assets/tools_schema.json).
 pub fn full_tools_schema() -> Vec<serde_json::Value> {
     use serde_json::json;
-    let code_types = if cfg!(windows) { json!(["python", "powershell"]) } else { json!(["python", "bash"]) };
+    let code_types = if cfg!(windows) {
+        json!(["python", "powershell", "lua", "javascript"])
+    } else {
+        json!(["python", "bash", "lua", "javascript"])
+    };
     let shell = if cfg!(windows) { "powershell" } else { "bash" };
     vec![
         json!({"type": "function", "function": {
             "name": "code_run",
-            "description": format!("代码执行器。优先使用python，仅在必要系统操作时使用 {}。注意：执行的代码必须放在在回复正文中，以 ```python 或 ```{} 代码块的形式。严禁在代码中硬编码大量数据，如有需要应通过文件读取。", shell, shell),
+            "description": format!("代码执行器。优先使用python，仅在必要系统操作时使用 {}。支持 lua/javascript(node)。注意：执行的代码必须放在在回复正文中，以 ```python 或 ```{} 代码块的形式。严禁在代码中硬编码大量数据，如有需要应通过文件读取。", shell, shell),
             "parameters": {"type": "object", "properties": {
-                "type": {"type": "string", "enum": code_types, "description": "执行环境类型，默认为 python。", "default": "python"},
+                "type": {"type": "string", "enum": code_types, "description": "执行环境类型，默认为 python。支持 python/bash/lua/javascript。", "default": "python"},
                 "timeout": {"type": "integer", "description": "执行超时时间（秒），默认 60。", "default": 60},
                 "cwd": {"type": "string", "description": "工作目录，默认为当前工作目录。"}
             }}

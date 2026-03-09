@@ -6,16 +6,17 @@ use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
-/// Execute code (Python, bash, or powershell) as a subprocess, streaming output.
-/// Mirrors Python's `code_run` function in ga.py.
+/// Execute code as a subprocess, streaming output.
+/// Mirrors Python's `code_run` function in ga.py, extended with Lua and JS support.
 ///
 /// Args:
-/// - `type` / `language`: "python" | "bash" | "powershell" (default: "python")
+/// - `type` / `language`: "python" | "bash" | "powershell" | "lua" | "javascript" / "js" / "node"
+///   (default: "python")
 /// - `code`: code string to execute
 /// - `timeout`: timeout in seconds (default: 60)
 /// - `cwd`: working directory (default: current directory)
 ///
-/// For Python, writes to a temp `.ai.py` file and runs it (proper multiline support).
+/// For Python/Lua/JS, writes to a temp file and runs it (proper multiline support).
 /// For bash/powershell, runs inline via shell.
 pub async fn code_run(
     args: &Value,
@@ -67,9 +68,12 @@ pub async fn code_run(
                     timeout_secs, cwd, tx,
                 ).await
             } else {
-                // On Linux/macOS, use bash as powershell fallback
                 run_process("bash", &["-c", code], timeout_secs, cwd, tx).await
             }
+        }
+        "lua" => run_script(code, "lua", ".lua", timeout_secs, cwd, tx).await,
+        "javascript" | "js" | "node" => {
+            run_script(code, "node", ".js", timeout_secs, cwd, tx).await
         }
         other => {
             let msg = format!("不支持的类型: {}\n", other);
@@ -77,6 +81,29 @@ pub async fn code_run(
             Ok((msg, 1))
         }
     }
+}
+
+/// Run a script by writing to a temp file with the given extension, then executing it.
+async fn run_script(
+    code: &str,
+    interpreter: &str,
+    ext: &str,
+    timeout_secs: u64,
+    cwd: Option<&str>,
+    tx: &UnboundedSender<String>,
+) -> Result<(String, i32)> {
+    use std::env;
+    use tokio::fs;
+
+    let tmp_dir = env::temp_dir();
+    let tmp_path = tmp_dir.join(format!("pc_agent_{}{}", uuid_short(), ext));
+    fs::write(&tmp_path, code).await?;
+
+    let tmp_str = tmp_path.to_str().unwrap_or("script");
+    let result = run_process(interpreter, &[tmp_str], timeout_secs, cwd, tx).await;
+
+    let _ = fs::remove_file(&tmp_path).await;
+    result
 }
 
 /// Run Python code by writing to a temp file, then executing it.

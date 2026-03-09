@@ -111,18 +111,18 @@ fn dirs_home() -> Option<PathBuf> {
 /// On non-Windows, "powershell" is replaced with "bash".
 pub fn default_tools_schema() -> Vec<Value> {
     let code_types = if cfg!(windows) {
-        json!(["python", "powershell"])
+        json!(["python", "powershell", "lua", "javascript"])
     } else {
-        json!(["python", "bash"])
+        json!(["python", "bash", "lua", "javascript"])
     };
     let code_type_desc = if cfg!(windows) { "powershell" } else { "bash" };
 
     vec![
         json!({"type": "function", "function": {
             "name": "code_run",
-            "description": format!("代码执行器。优先使用python，仅在必要系统操作时使用 {}。注意：执行的代码必须放在在回复正文中，以 ```python 或 ```{} 代码块的形式。严禁在代码中硬编码大量数据，如有需要应通过文件读取。", code_type_desc, code_type_desc),
+            "description": format!("代码执行器。优先使用python，仅在必要系统操作时使用 {}。支持 lua/javascript(node)。注意：执行的代码必须放在在回复正文中，以 ```python 或 ```{} 代码块的形式。严禁在代码中硬编码大量数据，如有需要应通过文件读取。", code_type_desc, code_type_desc),
             "parameters": {"type": "object", "properties": {
-                "type": {"type": "string", "enum": code_types, "description": "执行环境类型，默认为 python。", "default": "python"},
+                "type": {"type": "string", "enum": code_types, "description": "执行环境类型，默认为 python。支持 python/bash/lua/javascript。", "default": "python"},
                 "timeout": {"type": "integer", "description": "执行超时时间（秒），默认 60。", "default": 60},
                 "cwd": {"type": "string", "description": "工作目录，默认为当前工作目录。"}
             }}
