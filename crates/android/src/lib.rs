@@ -50,14 +50,15 @@ pub extern "system" fn Java_com_pcagentloop_AgentSession_nativeCreate(
     config_json: JString,
     work_dir: JString,
 ) -> jlong {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<jlong> {
-        let config_str: String = env.get_string(&config_json)?.into();
-        let work_dir_str: String = env.get_string(&work_dir)?.into();
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<jlong> {
+            let config_str: String = env.get_string(&config_json)?.into();
+            let work_dir_str: String = env.get_string(&work_dir)?.into();
 
-        let session = AgentSession::new(&config_str, &work_dir_str)?;
-        let boxed = Box::new(session);
-        Ok(Box::into_raw(boxed) as jlong)
-    }));
+            let session = AgentSession::new(&config_str, &work_dir_str)?;
+            let boxed = Box::new(session);
+            Ok(Box::into_raw(boxed) as jlong)
+        }));
 
     match result {
         Ok(Ok(ptr)) => ptr,
@@ -84,34 +85,33 @@ pub extern "system" fn Java_com_pcagentloop_AgentSession_nativeRunTask(
     task: JString,
     max_turns: jni::sys::jint,
 ) -> jstring {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<jstring> {
-        if ptr == 0 {
-            return Err(anyhow::anyhow!("Null AgentSession pointer"));
-        }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<jstring> {
+            if ptr == 0 {
+                return Err(anyhow::anyhow!("Null AgentSession pointer"));
+            }
 
-        let task_str: String = env.get_string(&task)?.into();
-        let max_turns_usize = max_turns.max(1) as usize;
+            let task_str: String = env.get_string(&task)?.into();
+            let max_turns_usize = max_turns.max(1) as usize;
 
-        // SAFETY: ptr was created by nativeCreate using Box::into_raw
-        let session = unsafe { &mut *(ptr as *mut AgentSession) };
+            // SAFETY: ptr was created by nativeCreate using Box::into_raw
+            let session = unsafe { &mut *(ptr as *mut AgentSession) };
 
-        // Block on the async operation using a new tokio runtime
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+            // Block on the async operation using a new tokio runtime
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
 
-        let json_result = rt.block_on(session.run_task(
-            &task_str,
-            max_turns_usize,
-            |_chunk| {
-                // Streaming chunks are discarded in the sync JNI binding.
-                // For streaming support, use a separate callback mechanism.
-            },
-        ))?;
+            let json_result =
+                rt.block_on(session.run_task(&task_str, max_turns_usize, |_chunk| {
+                    // Streaming chunks are discarded in the sync JNI binding.
+                    // For streaming support, use a separate callback mechanism.
+                }))?;
 
-        let jstr = env.new_string(&json_result)?;
-        Ok(jstr.into_raw())
-    }));
+            let jstr = env.new_string(&json_result)?;
+            Ok(jstr.into_raw())
+        },
+    ));
 
     match result {
         Ok(Ok(jstr)) => jstr,

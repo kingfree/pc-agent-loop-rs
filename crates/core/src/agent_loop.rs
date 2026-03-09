@@ -15,19 +15,35 @@ pub struct StepOutcome {
 
 impl StepOutcome {
     pub fn new(data: Option<Value>, next_prompt: Option<String>, should_exit: bool) -> Self {
-        StepOutcome { data, next_prompt, should_exit }
+        StepOutcome {
+            data,
+            next_prompt,
+            should_exit,
+        }
     }
 
     pub fn done(data: Option<Value>) -> Self {
-        StepOutcome { data, next_prompt: None, should_exit: false }
+        StepOutcome {
+            data,
+            next_prompt: None,
+            should_exit: false,
+        }
     }
 
     pub fn exit(data: Option<Value>) -> Self {
-        StepOutcome { data, next_prompt: None, should_exit: true }
+        StepOutcome {
+            data,
+            next_prompt: None,
+            should_exit: true,
+        }
     }
 
     pub fn next(data: Option<Value>, prompt: impl Into<String>) -> Self {
-        StepOutcome { data, next_prompt: Some(prompt.into()), should_exit: false }
+        StepOutcome {
+            data,
+            next_prompt: Some(prompt.into()),
+            should_exit: false,
+        }
     }
 }
 
@@ -73,6 +89,7 @@ pub fn json_default_serialize(data: &Value) -> String {
 /// - `tx`: channel to send streaming text chunks to the caller
 /// - `tools_schema`: JSON array of tool definitions
 /// - `verbose`: if true, stream raw LLM output; if false, only send tool info
+#[allow(clippy::too_many_arguments)]
 pub async fn agent_runner_loop(
     client: &mut ToolClient,
     system_prompt: &str,
@@ -88,7 +105,10 @@ pub async fn agent_runner_loop(
         {
             let mut m = serde_json::Map::new();
             m.insert("role".to_string(), Value::String("system".to_string()));
-            m.insert("content".to_string(), Value::String(system_prompt.to_string()));
+            m.insert(
+                "content".to_string(),
+                Value::String(system_prompt.to_string()),
+            );
             m
         },
         {
@@ -196,7 +216,11 @@ pub async fn agent_runner_loop(
         // Apply next_prompt_patcher
         let next_content = handler.next_prompt_patcher(&next_content, &outcome, turn_num);
 
-        debug!("Turn {} outcome, next prompt len: {}", turn_num, next_content.len());
+        debug!(
+            "Turn {} outcome, next prompt len: {}",
+            turn_num,
+            next_content.len()
+        );
 
         messages = vec![{
             let mut m = serde_json::Map::new();

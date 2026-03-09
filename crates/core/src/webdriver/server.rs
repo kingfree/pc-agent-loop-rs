@@ -11,12 +11,7 @@ use axum::{
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -125,7 +120,10 @@ impl TMWebDriver {
                 // Clean up
                 let mut channels = self.state.result_channels.lock().await;
                 channels.remove(&req_id);
-                Err(anyhow::anyhow!("JS execution timed out after {}s", timeout_secs))
+                Err(anyhow::anyhow!(
+                    "JS execution timed out after {}s",
+                    timeout_secs
+                ))
             }
         }
     }
@@ -143,7 +141,11 @@ async fn create_session(
 ) -> impl IntoResponse {
     let session_id = Uuid::new_v4().to_string();
     let now = chrono::Local::now().to_rfc3339();
-    let url = body.get("url").and_then(|u| u.as_str()).unwrap_or("about:blank").to_string();
+    let url = body
+        .get("url")
+        .and_then(|u| u.as_str())
+        .unwrap_or("about:blank")
+        .to_string();
 
     let session = SessionInfo {
         session_id: session_id.clone(),
@@ -180,7 +182,8 @@ async fn execute_js(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     let req_id = Uuid::new_v4().to_string();
-    let js = body.get("js")
+    let js = body
+        .get("js")
         .or_else(|| body.get("script"))
         .and_then(|j| j.as_str())
         .unwrap_or("")
@@ -206,9 +209,7 @@ async fn execute_js(
 }
 
 /// Browser polls for pending requests (long-polling)
-async fn poll_requests(
-    State(state): State<SharedState>,
-) -> impl IntoResponse {
+async fn poll_requests(State(state): State<SharedState>) -> impl IntoResponse {
     // Return pending requests (and clear them)
     let mut pending = state.pending_requests.lock().await;
     let requests: Vec<Value> = pending.drain(..).map(|(_, req)| req).collect();
@@ -220,9 +221,7 @@ async fn submit_result(
     State(state): State<SharedState>,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    let req_id = body.get("id")
-        .and_then(|id| id.as_str())
-        .unwrap_or("");
+    let req_id = body.get("id").and_then(|id| id.as_str()).unwrap_or("");
     let result = body.get("result").cloned().unwrap_or(Value::Null);
 
     let mut channels = state.result_channels.lock().await;
@@ -237,10 +236,7 @@ async fn submit_result(
 }
 
 /// WebSocket handler for real-time browser communication
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<SharedState>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<SharedState>) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_websocket(socket, state))
 }
 
@@ -260,7 +256,7 @@ async fn handle_websocket(socket: WebSocket, state: SharedState) {
             let mut pending = state_clone.pending_requests.lock().await;
             for (_, req) in pending.drain(..) {
                 let msg = serde_json::to_string(&req).unwrap_or_default();
-                if sender.send(Message::Text(msg.into())).await.is_err() {
+                if sender.send(Message::Text(msg)).await.is_err() {
                     debug!("WebSocket send error for session {}", session_id_clone);
                     return;
                 }
@@ -274,7 +270,8 @@ async fn handle_websocket(socket: WebSocket, state: SharedState) {
             match msg {
                 Ok(Message::Text(text)) => {
                     if let Ok(data) = serde_json::from_str::<Value>(&text) {
-                        let req_id = data.get("id")
+                        let req_id = data
+                            .get("id")
                             .and_then(|id| id.as_str())
                             .unwrap_or("")
                             .to_string();

@@ -2,41 +2,53 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Android%20%7C%20iOS-blue)](#platform-support)
+[![平台](https://img.shields.io/badge/平台-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Android-blue)](#平台支持)
 
-[English](#english) | [中文](#chinese)
+[pc-agent-loop](https://github.com/lsdefine/pc-agent-loop) 的纯 Rust 移植版。极简自主 Agent 框架，赋予任意 LLM 对 PC 的物理级控制能力：浏览器、终端、文件系统等。编译为单一二进制文件，无需 Python 或其他运行时。
 
-<a name="english"></a>
+> **原版 Python**：~3,300 行
+> **本移植版**：~2,500 行异步 Rust，Cargo 工作区，多平台 FFI
 
-A pure-Rust port of [pc-agent-loop](https://github.com/lsdefine/pc-agent-loop) — a minimalist autonomous agent framework that gives any LLM physical-level control over your PC: browser, terminal, file system, and beyond. Compiles to a single binary with zero runtime dependencies.
-
-> **Original project**: ~3,300 lines of Python  
-> **This port**: ~2,500 lines of async Rust, Cargo workspace with multi-platform FFI
-
-## What It Does
+## 工作原理
 
 ```
-You: "Monitor stock prices and alert me"
-Agent: installs dependencies → builds screening workflow → sets up scheduled task → saves as SOP
-Next time: one sentence to run.
-
-You: "Read the webpage and summarize it"
-Agent: web_scan → extract content → summarize → done
-
-You: "Fix the bug in main.rs"
-Agent: file_read → analyze → file_patch → verify
+用户指令
+    ↓
+┌──────────────────────────┐
+│  agent_loop（核心）       │  ← 感知-思考-行动循环
+│  文本协议 LLM 调用        │     <thinking> → <tool_use> → tool_result
+└──────────┬────────────────┘
+           ↓
+┌──────────────────────────┐
+│  8 个原子工具             │  ← 全部能力来源
+│  code_run                │     执行 Python / Bash / Lua（内嵌）/ JS
+│  file_read               │     按行范围读取 + 关键字搜索
+│  file_write              │     新建 / 覆盖 / 追加
+│  file_patch              │     基于唯一字符串匹配的精细修改
+│  web_scan                │     获取浏览器实时页面 HTML
+│  web_execute_js          │     在真实浏览器中执行 JS
+│  ask_user                │     人在回路中断点
+│  update_working_checkpoint │   短期工作记忆
+└──────────┬────────────────┘
+           ↓
+┌──────────────────────────┐
+│  记忆系统                 │  ← 跨会话持久化
+│  key_info 便签            │     每轮工作记忆
+│  history <summary>        │     每轮摘要提取
+│  global_mem_insight.txt   │     长期事实与学到的 SOP
+└──────────────────────────┘
 ```
 
-Every task the agent solves can become a permanent SOP stored in `memory/`. After a few weeks, your instance has a unique skill tree grown from use.
+Agent 使用**文本协议**工具调用（非原生 function calling），因此可用于任何能生成文本的 LLM——OpenAI、Claude、Gemini 或通过 OpenAI 兼容端点的本地模型。
 
-## Quick Start
+## 快速开始
 
 ```bash
-# 1. Clone
+# 1. 克隆
 git clone https://github.com/kingfree/pc-agent-loop-rs.git
 cd pc-agent-loop-rs
 
-# 2. Configure API key
+# 2. 配置 API Key
 cat > mykey.json << 'EOF'
 {
   "oai_config": {
@@ -47,137 +59,127 @@ cat > mykey.json << 'EOF'
 }
 EOF
 
-# 3. Build and run (interactive CLI)
+# 3. 编译并运行（交互式 CLI）
 cargo run --release -p pc-agent-loop
 
-# 4. Or launch the Web UI
-cargo run --release -p pc-agent-loop-gui -- --open
+# 4. 或启动 Tauri 桌面 GUI
+cargo run --release -p pc-agent-loop-gui
 ```
 
-The Web UI opens at `http://localhost:7891` — a dark-themed chat interface with streaming output, LLM switching, and abort controls.
-
-**Also runs on Android** — the `pc-agent-loop-android` crate compiles to a JNI `.so` usable from Kotlin/Java. See [Android Integration](#android-integration).
-
-## How It Works
+## 能做什么
 
 ```
-User instruction
-      ↓
-┌──────────────────────────┐
-│  agent_loop (core)        │  ← Sense-Think-Act cycle
-│  text-protocol LLM call   │     <thinking> → <tool_use> → tool_result
-└──────────┬────────────────┘
-           ↓
-┌──────────────────────────┐
-│  7 Atomic Tools           │  ← All capabilities derive from these
-│  code_run                 │     Execute Python / Bash / Lua / JavaScript
-│  file_read                │     Read with line ranges & keyword search
-│  file_write               │     Overwrite / append / prepend
-│  file_patch               │     Surgical unique-match edits
-│  web_scan                 │     Get live page HTML via browser bridge
-│  web_execute_js           │     Execute JS in real browser
-│  ask_user                 │     Human-in-the-loop breakpoint
-└──────────┬────────────────┘
-           ↓
-┌──────────────────────────┐
-│  Memory System            │  ← Persistent across sessions
-│  key_info checkpoint      │     Short-term working memory per turn
-│  history summaries        │     Per-turn <summary> extraction
-│  global_mem_insight.txt   │     Long-term facts & learned SOPs
-└──────────────────────────┘
+你：「监控股价并提醒我」
+Agent：安装依赖 → 构建筛选流程 → 设置定时任务 → 保存为 SOP
+下次：一句话复现
+
+你：「读取网页并总结」
+Agent：web_scan → 提取内容 → 总结 → 完成
+
+你：「修复 main.rs 中的 bug」
+Agent：file_read → 分析 → file_patch → 验证
 ```
 
-The agent uses a **text-based tool protocol** (not native function calling), so it works with any LLM that can generate text — OpenAI, Claude, Gemini, or local models via an OpenAI-compatible endpoint.
+每个解决过的任务都可以成为存储在 `memory/` 中的永久 SOP。用几周后，你的实例就拥有了从使用中生长出的独特技能树。
 
-## What Ships in the Box
+## 体积与运行时对比
 
-**Core engine** (`crates/core`):
-- `agent_loop` — Sense-Think-Act loop + `UnboundedSender<String>` streaming
-- `llm` — Multi-backend LLM client (OpenAI, Claude, Gemini), SSE streaming, auto-retry
-- `handler` — Tool dispatch + working-memory management + `<summary>` extraction
-- `tools` — `code_run` (Python / Bash / Lua / JavaScript), `file_read`, `file_patch`, `file_write`
-- `webdriver` — WebSocket + HTTP bridge to a real browser via Tampermonkey
+| 指标 | Python 原版 | Rust 移植版 |
+|---|---|---|
+| 发行体积 | Python 3 ~50 MB + pip 包 ~30–200 MB | 单一二进制 **~8 MB**（stripped） |
+| 启动耗时 | 1–3 秒（Python 导入） | < 50 ms |
+| 空闲内存 | ~60–120 MB | ~10–20 MB |
+| 运行时依赖 | Python 3 + pip | **无** |
+| Lua 解释器 | 需要外部 `lua` 命令 | **内嵌** Lua 5.4（mlua 编译进二进制） |
+| Lua 沙箱 | 无隔离 | 独立阻塞线程 + `ALL_SAFE` stdlib（禁止 `io`/`os`/`require`/`ffi`） |
 
-**Interfaces**:
-- `crates/cli` — Desktop CLI (`pc-agent-loop` binary), all run modes
-- `crates/gui` — Web chat UI (axum + SSE, dark theme, Markdown rendering)
-- `crates/android` — Android JNI cdylib (`libpc_agent_loop_android.so`)
-- `crates/ios` — iOS C FFI staticlib (`libpc_agent_loop_ios.a`)
+> 测量环境：Linux x86_64（Ubuntu 22.04）。Python 体积含典型 venv（requests、anthropic、websocket-client）。
 
-**Core SOPs** (ship in `memory/`, version-controlled — same `.md` files as the Python original):
-1. `memory_management_sop` — How the agent manages its own memory
-2. `autonomous_operation_sop` — Self-directed task execution
-3. `scheduled_task_sop` — Cron-like recurring tasks
-4. `web_setup_sop` — Browser environment bootstrap
-5. `ljqCtrl_sop` — Desktop physical control (keyboard, mouse)
+## 出厂清单
 
-## Platform Support
+**核心引擎**（`crates/core`）：
+- `agent_loop` — 感知-思考-行动循环，`UnboundedSender<String>` 流式输出
+- `llm` — 多后端 LLM 客户端（OpenAI、Claude、Gemini），SSE 流式，自动重试
+- `handler` — 工具分发 + 工作记忆 + `<summary>` 提取
+- `tools` — `code_run`（Python / Bash / **Lua 内嵌** / JavaScript）、`file_read`、`file_patch`、`file_write`
+- `webdriver` — 通过 Tampermonkey 注入真实浏览器的 WebSocket+HTTP 桥接
 
-| Platform | Binary / Library | Build Target |
-|----------|-----------------|--------------|
-| Linux    | Native CLI + GUI | `x86_64-unknown-linux-gnu` |
-| macOS    | Native CLI + GUI | `aarch64-apple-darwin` |
-| Windows  | Native CLI + GUI | `x86_64-pc-windows-msvc` |
-| Android  | JNI `.so`        | `aarch64-linux-android` |
-| iOS      | Static `.a`      | `aarch64-apple-ios` |
+**交互界面**：
+- `crates/cli` — 桌面 CLI，支持全部运行模式
+- `crates/gui` — Tauri 原生桌面应用（WebView + 暗色主题）
+- `crates/android` — Android JNI cdylib（`libpc_agent_loop_android.so`）
+- `crates/ios` — iOS C FFI staticlib（`libpc_agent_loop_ios.a`）
 
-Windows subprocesses automatically use `CREATE_NO_WINDOW` to suppress console windows.
+**5 个核心 SOP**（`memory/` 目录，与 Python 原版格式完全相同）：
+1. `memory_management_sop` — Agent 如何管理自身记忆
+2. `autonomous_operation_sop` — 自主任务执行
+3. `scheduled_task_sop` — 定时任务
+4. `web_setup_sop` — 浏览器环境引导
+5. `ljqCtrl_sop` — 桌面物理控制
 
-## CLI Usage
+## 平台支持
+
+| 平台 | 产物 | 构建目标 |
+|------|------|---------|
+| Linux x86_64 | CLI + GUI（.AppImage/.deb） | `x86_64-unknown-linux-gnu` |
+| Linux aarch64 | CLI | `aarch64-unknown-linux-gnu` |
+| macOS Apple Silicon | CLI + GUI（.dmg） | `aarch64-apple-darwin` |
+| macOS Intel | CLI + GUI | `x86_64-apple-darwin` |
+| Windows x86_64 | CLI + GUI（.msi） | `x86_64-pc-windows-msvc` |
+| Android | JNI `.so`（arm64-v8a + x86_64） | `aarch64-linux-android` |
+| iOS | Static `.a` | `aarch64-apple-ios` |
+
+Windows 子进程自动使用 `CREATE_NO_WINDOW` 抑制控制台窗口。
+
+## CLI 用法
 
 ```bash
-# Interactive mode (read from stdin)
+# 交互式（从 stdin 读取）
 pc-agent-loop
 
-# Single task
-pc-agent-loop --task "List all Rust files and count lines"
+# 单次任务
+pc-agent-loop --task "列出所有 Rust 文件并统计行数"
 
-# Task from IO directory (reads input.txt, writes output.txt)
+# 文件 IO 模式（读 input.txt，写 output.txt）
 pc-agent-loop task ./my-task-dir/
 
-# Scheduled mode — polls sche_tasks/pending/ every ~60s
+# 定时任务模式——每 ~60 秒轮询 sche_tasks/pending/
 pc-agent-loop scheduled
 
-# Reflect mode — runs a check() script on interval, submits result as task
+# 反射模式——定期运行 check() 脚本，将返回值作为任务
 pc-agent-loop --reflect reflect/autonomous.py
 
-# With WebDriver browser automation server
-pc-agent-loop --webdriver --task "Open example.com and get the title"
+# 带浏览器自动化
+pc-agent-loop --webdriver --task "打开 example.com 并获取标题"
 
-# Start WebDriver server only
+# 仅启动 WebDriver 服务器
 pc-agent-loop webdriver --port 9999
 
-# Select LLM backend (0-indexed, when multiple configured)
+# 选择 LLM 后端（多后端配置时，0 起始索引）
 pc-agent-loop --llm-no 1
 
-# Verbose (stream raw LLM output token by token)
+# 详细输出（逐 token 流式）
 pc-agent-loop --verbose --task "..."
 
-# Limit agent turns
+# 限制 Agent 轮数
 pc-agent-loop --max-turns 30 --task "..."
 ```
 
-## Web GUI
+## Tauri 桌面 GUI
 
 ```bash
-# Start Web UI on default port 7891
+# 开发模式启动
 cargo run --release -p pc-agent-loop-gui
-
-# Custom port and auto-open browser
-cargo run --release -p pc-agent-loop-gui -- --port 8080 --open
-
-# Custom work directory
-cargo run --release -p pc-agent-loop-gui -- --work-dir /home/user/agent-work
 ```
 
-The GUI provides:
-- **Streaming chat** — agent output streamed token by token via SSE
-- **Markdown rendering** — bold, inline code, fenced code blocks
-- **LLM switcher** — cycle through configured backends
-- **Abort** — stop the current task mid-execution
-- **Turn counter** — shows current agent turn in the sidebar
+功能：
+- **流式聊天** — Agent 输出逐 token 通过 IPC 事件传输
+- **Markdown 渲染** — 粗体、内联代码、代码块
+- **LLM 切换** — 在已配置的后端之间循环
+- **中止任务** — 随时停止当前执行
+- **轮数显示** — 侧边栏显示当前 Agent 轮次
 
-## Configuration (mykey.json)
+## 配置（mykey.json）
 
 ```json
 {
@@ -198,82 +200,82 @@ The GUI provides:
 }
 ```
 
-Config is searched in order: `--config` flag → `./mykey.json` → `~/.config/pc-agent/mykey.json`.
+配置查找顺序：`--config` 参数 → `./mykey.json` → `~/.config/pc-agent/mykey.json`。
 
-Multiple backends can be configured simultaneously. Use `--llm-no` (CLI) or the GUI's "切换 LLM" button to switch.
+多后端可同时配置。使用 `--llm-no`（CLI）或 GUI 的「切换 LLM」按钮切换。
 
-## Browser Automation
+## 浏览器自动化
 
-The `web_scan` and `web_execute_js` tools connect to a running TMWebDriver server (default `localhost:18766`). To use them:
+`web_scan` 和 `web_execute_js` 通过 TMWebDriver 服务器（默认 `localhost:18766`）连接运行中的浏览器：
 
-1. Install the [Tampermonkey](https://www.tampermonkey.net/) browser extension
-2. Install the userscript from `assets/tmwd_cdp_bridge/` of the [original project](https://github.com/lsdefine/pc-agent-loop)
-3. Start the WebDriver server:
+1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 浏览器扩展
+2. 从[原始项目](https://github.com/lsdefine/pc-agent-loop)的 `assets/tmwd_cdp_bridge/` 安装用户脚本
+3. 启动 WebDriver 服务器：
 
 ```bash
-# Alongside the agent
-pc-agent-loop --webdriver --task "Summarize the top HN posts"
+# 随 Agent 一起启动
+pc-agent-loop --webdriver --task "总结 HN 热门文章"
 
-# Standalone server
+# 独立服务器
 pc-agent-loop webdriver --port 9999
 ```
 
-The bridge injects into your real browser — no sandboxing, keeps login state, works with any site.
+该桥接注入你的真实浏览器——无沙箱，保留登录状态，适用于任何网站。
 
-## Scheduled Tasks
+## 定时任务
 
-Drop task files into `sche_tasks/pending/` with filename `YYYY-MM-DD_HHMM_description.txt`:
+将任务文件放入 `sche_tasks/pending/`，文件名格式：`YYYY-MM-DD_HHMM_描述.txt`：
 
 ```
 sche_tasks/pending/2025-03-10_0900_morning-briefing.txt
 ```
 
-Start the scheduler (polls every ~60s):
+启动调度器（每 ~60 秒轮询）：
 
 ```bash
 pc-agent-loop scheduled
 ```
 
-Tasks move through `pending/` → `running/` → `done/` automatically.
+任务自动经历 `pending/` → `running/` → `done/` 流转。
 
-## Reflect Mode
+## 反射模式
 
-Reflect mode runs a Python check script on a fixed interval. When `check()` returns a string, it's submitted as a task:
+反射模式以固定间隔运行 Python 检查脚本。当 `check()` 返回字符串时，作为任务提交：
 
 ```bash
-pc-agent-loop --reflect reflect/autonomous.py   # idle automation every 30min
-pc-agent-loop --reflect reflect/scheduler.py    # scheduled task trigger
+pc-agent-loop --reflect reflect/autonomous.py   # 每 30 分钟自动化
+pc-agent-loop --reflect reflect/scheduler.py    # 定时任务触发器
 ```
 
-Write your own:
+自定义示例：
 
 ```python
-INTERVAL = 300  # seconds between checks
-ONCE = False    # True to exit after first trigger
+INTERVAL = 300  # 检查间隔（秒）
+ONCE = False    # True 表示首次触发后退出
 
 def check():
     if some_condition():
-        return "Do X because Y happened"
+        return "因为 Y 发生，执行 X"
     return None
 ```
 
-## Android Integration
+## Android 集成
 
 ```bash
-# Build
+# 构建
 cargo install cargo-ndk
 cargo ndk -t arm64-v8a build --release -p pc-agent-loop-android
 # → target/aarch64-linux-android/release/libpc_agent_loop_android.so
 ```
 
-Copy the `.so` into your Android project's `app/src/main/jniLibs/arm64-v8a/`, then:
+将 `.so` 复制到 Android 项目的 `app/src/main/jniLibs/arm64-v8a/`，然后：
 
 ```kotlin
 package com.pcagentloop
 
 class AgentSession(configJson: String, workDir: String) {
     private val ptr: Long = nativeCreate(configJson, workDir).also {
-        if (it == 0L) throw RuntimeException("Failed to create AgentSession")
+        if (it == 0L) throw RuntimeException("创建 AgentSession 失败")
     }
 
     suspend fun runTask(task: String, maxTurns: Int = 15): String =
@@ -291,16 +293,16 @@ class AgentSession(configJson: String, workDir: String) {
 }
 ```
 
-## iOS Integration
+## iOS 集成
 
 ```bash
-# Build
+# 构建
 rustup target add aarch64-apple-ios
 cargo build --target aarch64-apple-ios --release -p pc-agent-loop-ios
 # → target/aarch64-apple-ios/release/libpc_agent_loop_ios.a
 ```
 
-Link `libpc_agent_loop_ios.a` in Xcode, then use the Swift wrapper:
+在 Xcode 中链接 `libpc_agent_loop_ios.a`，然后使用 Swift 封装：
 
 ```swift
 class AgentSession {
@@ -321,148 +323,7 @@ class AgentSession {
 }
 ```
 
-The full C header is documented in `crates/ios/src/lib.rs`.
-
-## Binary Size & Runtime Footprint
-
-The Rust binary is self-contained — no Python, no Node.js, no pip install.
-
-| | pc-agent-loop (Python) | pc-agent-loop-rs (Rust) |
-|---|---|---|
-| Distribution size | Python 3 runtime ~50 MB + pip packages ~30–200 MB | Single binary **~8 MB** (stripped, Linux x86_64) |
-| Startup time | 1–3 s (Python + imports) | < 50 ms |
-| Idle RAM | ~60–120 MB (Python process) | ~10–20 MB |
-| Runtime required | Python 3, `pip install` | None — binary is self-contained |
-| Lua interpreter | External `lua` binary required | **Embedded** Lua 5.4 (mlua, compiled in) |
-| Lua sandbox | No isolation | Runs on dedicated blocking thread, `ALL_SAFE` stdlib only (no `io`/`os`/`require`/`ffi`) |
-
-> Measured on Linux x86_64 (Ubuntu 22.04). Python size includes a typical `venv` with requests, anthropic, websocket-client.
-
-## vs. Python Original
-
-| | pc-agent-loop (Python) | pc-agent-loop-rs (Rust) |
-|---|---|---|
-| Lines | ~3,300 | ~2,500 |
-| Runtime | Python 3 + pip deps | Single binary, no runtime |
-| GUI | Streamlit + pywebview | axum + embedded HTML/JS |
-| Telegram bot | tgapp.py | Not yet ported |
-| Browser bridge | bottle + simple_websocket_server | axum + tokio-tungstenite |
-| HTML simplifier | BeautifulSoup + custom JS | TMWebDriver HTTP relay |
-| LLM backends | OpenAI, Claude, Gemini, xAI, Sider | OpenAI, Claude, Gemini |
-| Mobile | Termux (Python CLI) | Native JNI / C FFI |
-| Memory format | Files in `memory/` | Same files, same format |
-| SOPs | 5 core, self-growing | 5 core (same `.md` files) |
-
-## Building
-
-```bash
-# Check all crates
-cargo check --workspace
-
-# Desktop release
-cargo build --release -p pc-agent-loop
-cargo build --release -p pc-agent-loop-gui
-
-# Android (requires Android NDK + cargo-ndk)
-cargo install cargo-ndk
-cargo ndk -t arm64-v8a -t x86_64 build --release -p pc-agent-loop-android
-
-# iOS (requires Xcode on macOS)
-rustup target add aarch64-apple-ios x86_64-apple-ios
-cargo build --target aarch64-apple-ios --release -p pc-agent-loop-ios
-```
-
-## License
-
-MIT — see [LICENSE](LICENSE)
-
----
-
-<a name="chinese"></a>
-
-# pc-agent-loop-rs（中文说明）
-
-[pc-agent-loop](https://github.com/lsdefine/pc-agent-loop) 的纯 Rust 移植版。极简自主 Agent 框架，让任意 LLM 获得 PC 物理级控制能力。编译为单个二进制文件，无需 Python 或其他运行时。
-
-## 快速开始
-
-```bash
-git clone https://github.com/kingfree/pc-agent-loop-rs.git
-cd pc-agent-loop-rs
-
-# 配置 API Key
-echo '{"oai_config":{"apikey":"sk-...","apibase":"https://api.openai.com","model":"gpt-4o"}}' > mykey.json
-
-# 交互式 CLI
-cargo run --release -p pc-agent-loop
-
-# Web 界面（自动打开浏览器）
-cargo run --release -p pc-agent-loop-gui -- --open
-```
-
-## 出厂清单
-
-**核心引擎**（`crates/core`）：
-- `agent_loop` — 感知-思考-行动循环，流式输出通道
-- `llm` — 多后端 LLM（OpenAI、Claude、Gemini），SSE 流式，自动重试
-- `handler` — 工具分发 + 工作记忆 + `<summary>` 提取
-- `tools` — `code_run`（支持 Python/Bash/Lua/JavaScript）、`file_read`、`file_patch`、`file_write`
-- `webdriver` — 通过 Tampermonkey 注入真实浏览器的 WebSocket+HTTP 桥接
-
-**交互界面**：
-- `crates/cli` — 桌面 CLI，支持全部运行模式
-- `crates/gui` — Web 聊天界面（axum + SSE，暗色主题，Markdown 渲染）
-- `crates/android` — Android JNI cdylib
-- `crates/ios` — iOS C FFI staticlib
-
-**5 个核心 SOP**（`memory/` 目录，与 Python 原版格式完全相同）：
-1. `memory_management_sop` — Agent 如何管理自身记忆
-2. `autonomous_operation_sop` — 自主任务执行
-3. `scheduled_task_sop` — 定时任务
-4. `web_setup_sop` — 浏览器环境引导
-5. `ljqCtrl_sop` — 桌面物理控制
-
-## 配置（mykey.json）
-
-```json
-{
-  "oai_config": {"apikey": "sk-...", "apibase": "https://api.openai.com", "model": "gpt-4o"},
-  "claude_config": {"apikey": "sk-ant-...", "model": "claude-opus-4-5"},
-  "gemini_config": {"apikey": "AIza...", "model": "gemini-2.0-flash"},
-  "proxy": "http://127.0.0.1:7890"
-}
-```
-
-## CLI 模式
-
-```bash
-pc-agent-loop                              # 交互式
-pc-agent-loop --task "..."                 # 单次任务
-pc-agent-loop task ./my-task-dir/          # 文件 IO 模式
-pc-agent-loop scheduled                    # 定时任务轮询
-pc-agent-loop --reflect reflect/autonomous.py  # 反射模式
-pc-agent-loop --webdriver --task "..."     # 带浏览器自动化
-pc-agent-loop --llm-no 1                   # 选择 LLM 后端
-```
-
-## Web 界面
-
-```bash
-cargo run --release -p pc-agent-loop-gui -- --open
-```
-
-功能：流式聊天输出、Markdown 渲染、LLM 切换、中止任务、当前轮数显示。
-
-## 二进制体积与运行时对比
-
-| 指标 | Python 原版 | Rust 移植版 |
-|---|---|---|
-| 发行体积 | Python 3 ~50 MB + pip 包 ~30–200 MB | 单一二进制 **~8 MB**（stripped） |
-| 启动耗时 | 1–3 秒（Python 导入） | < 50 ms |
-| 空闲内存 | ~60–120 MB | ~10–20 MB |
-| 运行时依赖 | Python 3 + pip | **无** |
-| Lua 解释器 | 需要外部 `lua` 命令 | **内嵌** Lua 5.4（mlua 编译进二进制） |
-| Lua 沙箱 | 无隔离 | 独立阻塞线程 + `ALL_SAFE` stdlib（禁止 `io`/`os`/`require`/`ffi`） |
+完整 C 头文件见 `crates/ios/src/lib.rs`。
 
 ## 与 Python 原版对比
 
@@ -471,9 +332,32 @@ cargo run --release -p pc-agent-loop-gui -- --open
 | 代码量 | ~3,300 行 | ~2,500 行 |
 | 运行时 | Python 3 + pip | 单一二进制文件 |
 | GUI | Streamlit + pywebview | Tauri（原生 WebView） |
-| 移动端 | Termux CLI | 原生 JNI / C FFI |
+| Telegram Bot | tgapp.py | 暂未移植 |
+| 浏览器桥接 | bottle + simple_websocket_server | axum + tokio-tungstenite |
+| HTML 简化器 | BeautifulSoup + 自定义 JS | TMWebDriver HTTP 中继 |
 | LLM 后端 | OpenAI、Claude、Gemini、xAI、Sider | OpenAI、Claude、Gemini |
-| 记忆文件 | `memory/*.md` | 同格式 `memory/*.md` |
+| 移动端 | Termux（Python CLI） | 原生 JNI / C FFI |
+| 记忆格式 | `memory/` 中的文件 | 同格式同目录 |
+| SOP | 5 个核心，自动增长 | 5 个核心（相同 `.md` 文件） |
+
+## 构建
+
+```bash
+# 检查所有 crate
+cargo check --workspace
+
+# 桌面发布版
+cargo build --release -p pc-agent-loop
+cargo build --release -p pc-agent-loop-gui
+
+# Android（需要 Android NDK + cargo-ndk）
+cargo install cargo-ndk
+cargo ndk -t arm64-v8a -t x86_64 build --release -p pc-agent-loop-android
+
+# iOS（需要 macOS + Xcode）
+rustup target add aarch64-apple-ios x86_64-apple-ios
+cargo build --target aarch64-apple-ios --release -p pc-agent-loop-ios
+```
 
 ## 许可
 

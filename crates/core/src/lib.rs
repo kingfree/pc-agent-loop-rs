@@ -42,7 +42,10 @@ fn load_global_memory_str(work_dir: &str) -> String {
     if let Ok(text) = std::fs::read_to_string(&insight) {
         let struct_text = std::fs::read_to_string(&structure).unwrap_or_default();
         result.push_str("\n[Memory]\n");
-        result.push_str(&format!("cwd = {} （用./引用）\n", base.join("temp").display()));
+        result.push_str(&format!(
+            "cwd = {} （用./引用）\n",
+            base.join("temp").display()
+        ));
         if !struct_text.is_empty() {
             result.push_str(&struct_text);
             result.push('\n');

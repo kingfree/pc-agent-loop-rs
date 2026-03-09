@@ -4,8 +4,8 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, warn};
 
-use crate::llm::types::{AppConfig, MockResponse, MockToolCall};
 use crate::llm::session::{ClaudeSession, LLMSession};
+use crate::llm::types::{AppConfig, MockResponse, MockToolCall};
 
 /// Backend selection
 pub enum LLMBackend {
@@ -47,15 +47,27 @@ impl ToolClient {
         messages: &[serde_json::Map<String, Value>],
         tools: &[Value],
     ) -> String {
-        let system_content: String = messages.iter()
-            .find(|m| m.get("role").and_then(|r| r.as_str()).map(|r| r.to_lowercase()) == Some("system".to_string()))
+        let system_content: String = messages
+            .iter()
+            .find(|m| {
+                m.get("role")
+                    .and_then(|r| r.as_str())
+                    .map(|r| r.to_lowercase())
+                    == Some("system".to_string())
+            })
             .and_then(|m| m.get("content"))
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string();
 
-        let history_msgs: Vec<&serde_json::Map<String, Value>> = messages.iter()
-            .filter(|m| m.get("role").and_then(|r| r.as_str()).map(|r| r.to_lowercase()) != Some("system".to_string()))
+        let history_msgs: Vec<&serde_json::Map<String, Value>> = messages
+            .iter()
+            .filter(|m| {
+                m.get("role")
+                    .and_then(|r| r.as_str())
+                    .map(|r| r.to_lowercase())
+                    != Some("system".to_string())
+            })
             .collect();
 
         let tool_instruction = if !tools.is_empty() {
@@ -65,7 +77,7 @@ impl ToolClient {
             } else {
                 self.total_cd_tokens = 0;
                 format!(
-r#"
+                    r#"
 ### 交互协议 (必须严格遵守，持续有效)
 请按照以下步骤思考并行动，标签之间需要回车换行：
 1. **思考**: 在 `<thinking>` 标签中先进行思考，分析现状和策略。
@@ -93,7 +105,11 @@ r#"
 
         for m in &history_msgs {
             let role_raw = m.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-            let role = if role_raw == "user" { "USER" } else { "ASSISTANT" };
+            let role = if role_raw == "user" {
+                "USER"
+            } else {
+                "ASSISTANT"
+            };
             let content = m.get("content").and_then(|c| c.as_str()).unwrap_or("");
             prompt.push_str(&format!("=== {} ===\n{}\n\n", role, content));
             self.total_cd_tokens += content.len();
@@ -114,7 +130,8 @@ r#"
 
         // Extract <thinking>
         let think_re = Regex::new(r"(?s)<thinking>(.*?)</thinking>").unwrap();
-        let thinking = think_re.captures(&remaining)
+        let thinking = think_re
+            .captures(&remaining)
             .map(|c| c[1].trim().to_string())
             .unwrap_or_default();
         remaining = think_re.replace_all(&remaining, "").to_string();
@@ -125,7 +142,8 @@ r#"
 
         // Try complete <tool_use>...</tool_use> blocks
         let tool_all_re = Regex::new(r"(?s)<tool_use>(.{15,}?)</tool_use>").unwrap();
-        let tool_all: Vec<String> = tool_all_re.captures_iter(&remaining)
+        let tool_all: Vec<String> = tool_all_re
+            .captures_iter(&remaining)
             .map(|c| c[1].trim().to_string())
             .collect();
 
@@ -164,13 +182,15 @@ r#"
         for json_str in &json_strs {
             match try_parse_json(json_str) {
                 Ok(data) => {
-                    let func_name = data.get("name")
+                    let func_name = data
+                        .get("name")
                         .or_else(|| data.get("function"))
                         .or_else(|| data.get("tool"))
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    let args = data.get("arguments")
+                    let args = data
+                        .get("arguments")
                         .or_else(|| data.get("args"))
                         .or_else(|| data.get("params"))
                         .or_else(|| data.get("parameters"))
@@ -183,7 +203,11 @@ r#"
                 }
                 Err(e) => {
                     warn!("Failed to parse tool_use JSON: {}", e);
-                    let preview = if json_str.len() > 200 { &json_str[..200] } else { json_str.as_str() };
+                    let preview = if json_str.len() > 200 {
+                        &json_str[..200]
+                    } else {
+                        json_str.as_str()
+                    };
                     errors.push(format!("Failed to parse tool_use JSON: {}", preview));
                     self.last_tools = String::new();
                 }
@@ -193,13 +217,20 @@ r#"
         // If parse errors but no successful tool_calls, emit bad_json tool
         if tool_calls.is_empty() && !errors.is_empty() {
             for e in &errors {
-                tool_calls.push(MockToolCall::new("bad_json", serde_json::json!({ "msg": e })));
+                tool_calls.push(MockToolCall::new(
+                    "bad_json",
+                    serde_json::json!({ "msg": e }),
+                ));
             }
         }
 
         let content = remaining.trim().to_string();
         // Only keep last tool call (matching Python's `tool_calls[-1:]`)
-        let last_tool = if tool_calls.is_empty() { vec![] } else { vec![tool_calls.pop().unwrap()] };
+        let last_tool = if tool_calls.is_empty() {
+            vec![]
+        } else {
+            vec![tool_calls.pop().unwrap()]
+        };
 
         MockResponse::new(thinking, content, last_tool, text.to_string())
     }
@@ -216,12 +247,8 @@ r#"
         debug!("Prompt length: {} chars", prompt.len());
 
         let raw_text = match &self.backend {
-            LLMBackend::OpenAI(session) => {
-                session.stream_completion(&prompt, tx, 3).await?
-            }
-            LLMBackend::Claude(session) => {
-                session.stream_completion(&prompt, tx, 3).await?
-            }
+            LLMBackend::OpenAI(session) => session.stream_completion(&prompt, tx, 3).await?,
+            LLMBackend::Claude(session) => session.stream_completion(&prompt, tx, 3).await?,
         };
 
         Ok(self.parse_mixed_response(&raw_text))

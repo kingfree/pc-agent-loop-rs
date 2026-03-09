@@ -1,7 +1,7 @@
+use serde::Serialize;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
-use tokio::sync::{Mutex, oneshot};
-use serde::Serialize;
+use tokio::sync::{oneshot, Mutex};
 
 use pc_agent_loop_core::llm::types::AppConfig;
 
@@ -39,11 +39,7 @@ struct StatusPayload {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-async fn run_task(
-    query: String,
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+async fn run_task(query: String, app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let shared = state.0.clone();
 
     {
@@ -74,8 +70,7 @@ async fn run_task(
         let agent_handle = tauri::async_runtime::spawn(async move {
             use pc_agent_loop_core::{
                 agent_runner_loop, build_system_prompt, full_tools_schema,
-                handler::GenericAgentHandler,
-                llm::ToolClient,
+                handler::GenericAgentHandler, llm::ToolClient,
             };
 
             let mut client = match ToolClient::new(config) {
@@ -183,7 +178,11 @@ fn load_config() -> AppConfig {
             }
         }
     }
-    AppConfig { oai_config: None, claude_config: None, proxy: None }
+    AppConfig {
+        oai_config: None,
+        claude_config: None,
+        proxy: None,
+    }
 }
 
 fn detect_llm_names(config: &AppConfig) -> Vec<String> {
@@ -235,10 +234,7 @@ fn main() {
     tauri::Builder::default()
         .manage(state)
         .invoke_handler(tauri::generate_handler![
-            run_task,
-            abort_task,
-            get_status,
-            switch_llm,
+            run_task, abort_task, get_status, switch_llm,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

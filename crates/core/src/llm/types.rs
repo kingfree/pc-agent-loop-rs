@@ -34,8 +34,18 @@ pub struct MockResponse {
 }
 
 impl MockResponse {
-    pub fn new(thinking: String, content: String, tool_calls: Vec<MockToolCall>, raw_text: String) -> Self {
-        MockResponse { thinking, content, tool_calls, raw_text }
+    pub fn new(
+        thinking: String,
+        content: String,
+        tool_calls: Vec<MockToolCall>,
+        raw_text: String,
+    ) -> Self {
+        MockResponse {
+            thinking,
+            content,
+            tool_calls,
+            raw_text,
+        }
     }
 }
 

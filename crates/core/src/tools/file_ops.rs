@@ -14,20 +14,23 @@ use tracing::debug;
 /// - `keyword`: if provided, return first match (case-insensitive) and context
 /// - `show_linenos`: show line numbers in `line|content` format (default: true)
 pub async fn file_read(args: &Value) -> Result<String> {
-    let path = args.get("path")
+    let path = args
+        .get("path")
         .or_else(|| args.get("file"))
         .or_else(|| args.get("filename"))
         .and_then(|p| p.as_str())
         .ok_or_else(|| anyhow!("file_read: 'path' argument is required"))?;
 
     // Support both Python names and legacy Rust names
-    let show_linenos = args.get("show_linenos")
+    let show_linenos = args
+        .get("show_linenos")
         .or_else(|| args.get("show_line_numbers"))
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
     // `start` (Python) or `start_line` (legacy)
-    let start = args.get("start")
+    let start = args
+        .get("start")
         .or_else(|| args.get("start_line"))
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
@@ -35,14 +38,18 @@ pub async fn file_read(args: &Value) -> Result<String> {
         .max(1);
 
     // `count` (Python) or `max_lines` (legacy)
-    let count = args.get("count")
+    let count = args
+        .get("count")
         .or_else(|| args.get("max_lines"))
         .and_then(|v| v.as_u64())
         .unwrap_or(200) as usize;
 
     let keyword = args.get("keyword").and_then(|k| k.as_str());
 
-    debug!("file_read: path={}, start={}, count={}, keyword={:?}", path, start, count, keyword);
+    debug!(
+        "file_read: path={}, start={}, count={}, keyword={:?}",
+        path, start, count, keyword
+    );
 
     if !Path::new(path).exists() {
         return Ok(format!("Error: 文件不存在: {}", path));
@@ -66,14 +73,19 @@ pub async fn file_read(args: &Value) -> Result<String> {
             if line.to_lowercase().contains(&kw_lower) {
                 let before: Vec<(usize, &&str)> = before_buf.iter().cloned().collect();
                 let remaining_count = count.saturating_sub(before.len() + 1);
-                let after: Vec<(usize, &&str)> = all_lines.iter()
+                let after: Vec<(usize, &&str)> = all_lines
+                    .iter()
                     .enumerate()
                     .skip(i + 1)
                     .take(remaining_count)
                     .collect();
 
                 let mut result = String::new();
-                for (j, l) in before.iter().chain(std::iter::once(&(i, line))).chain(after.iter()) {
+                for (j, l) in before
+                    .iter()
+                    .chain(std::iter::once(&(i, line)))
+                    .chain(after.iter())
+                {
                     let lineno = j + 1;
                     if show_linenos {
                         result.push_str(&format!("{}|{}\n", lineno, truncate_line(l)));
@@ -99,7 +111,13 @@ pub async fn file_read(args: &Value) -> Result<String> {
     }
 
     // Normal paginated read
-    Ok(file_read_range(&all_lines, total_lines, start, count, show_linenos))
+    Ok(file_read_range(
+        &all_lines,
+        total_lines,
+        start,
+        count,
+        show_linenos,
+    ))
 }
 
 /// Format lines for output, matching Python's `line_number|content` format.
@@ -117,7 +135,11 @@ fn file_read_range(
     let remaining = total_lines.saturating_sub(end_idx);
 
     // Max chars per line to avoid huge outputs (mirrors Python L_MAX = max(100, 512000//realcnt))
-    let l_max = if real_count == 0 { 512 } else { (512000 / real_count).max(100) };
+    let l_max = if real_count == 0 {
+        512
+    } else {
+        (512000 / real_count).max(100)
+    };
 
     let mut result = if show_linenos {
         // Python header: "[FILE] Total X lines\n"
@@ -135,7 +157,9 @@ fn file_read_range(
         let lineno = start_idx + i + 1;
         if show_linenos {
             let (truncated, was_truncated) = truncate_line_max(line, l_max);
-            if was_truncated { has_truncated = true; }
+            if was_truncated {
+                has_truncated = true;
+            }
             result.push_str(&format!("{}|{}\n", lineno, truncated));
         } else {
             result.push_str(&format!("{}\n", line));
@@ -150,7 +174,11 @@ fn file_read_range(
 }
 
 fn truncate_line(line: &str) -> &str {
-    if line.len() <= 512 { line } else { &line[..512] }
+    if line.len() <= 512 {
+        line
+    } else {
+        &line[..512]
+    }
 }
 
 fn truncate_line_max(line: &str, max: usize) -> (String, bool) {
@@ -169,17 +197,20 @@ fn truncate_line_max(line: &str, max: usize) -> (String, bool) {
 /// - `old_content`: text to find (must be unique in file)
 /// - `new_content`: replacement text
 pub async fn file_patch(args: &Value) -> Result<String> {
-    let path = args.get("path")
+    let path = args
+        .get("path")
         .or_else(|| args.get("file"))
         .and_then(|p| p.as_str())
         .ok_or_else(|| anyhow!("file_patch: 'path' is required"))?;
 
-    let old_content = args.get("old_content")
+    let old_content = args
+        .get("old_content")
         .or_else(|| args.get("old"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("file_patch: 'old_content' is required"))?;
 
-    let new_content = args.get("new_content")
+    let new_content = args
+        .get("new_content")
         .or_else(|| args.get("new"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("file_patch: 'new_content' is required"))?;
@@ -191,7 +222,9 @@ pub async fn file_patch(args: &Value) -> Result<String> {
     }
 
     if old_content.is_empty() {
-        return Ok(r#"{"status": "error", "msg": "old_content 为空，请确认 arguments"}"#.to_string());
+        return Ok(
+            r#"{"status": "error", "msg": "old_content 为空，请确认 arguments"}"#.to_string(),
+        );
     }
 
     let content = fs::read_to_string(path).await?;
@@ -222,23 +255,31 @@ pub async fn file_patch(args: &Value) -> Result<String> {
 /// - `content`: file content (may contain <file_content> tags or ``` blocks)
 /// - `mode`: "overwrite" | "append" | "prepend" (default: "overwrite")
 pub async fn file_write(args: &Value) -> Result<String> {
-    let path = args.get("path")
+    let path = args
+        .get("path")
         .or_else(|| args.get("file"))
         .and_then(|p| p.as_str())
         .ok_or_else(|| anyhow!("file_write: 'path' is required"))?;
 
-    let raw_content = args.get("content")
+    let raw_content = args
+        .get("content")
         .and_then(|c| c.as_str())
         .ok_or_else(|| anyhow!("file_write: 'content' is required"))?;
 
-    let mode = args.get("mode")
+    let mode = args
+        .get("mode")
         .and_then(|m| m.as_str())
         .unwrap_or("overwrite");
 
     // Extract actual content from <file_content> tags if present
     let content = extract_file_content(raw_content);
 
-    debug!("file_write: path={}, mode={}, content_len={}", path, mode, content.len());
+    debug!(
+        "file_write: path={}, mode={}, content_len={}",
+        path,
+        mode,
+        content.len()
+    );
 
     // Ensure parent directory exists
     if let Some(parent) = Path::new(path).parent() {
@@ -256,7 +297,10 @@ pub async fn file_write(args: &Value) -> Result<String> {
             };
             existing.push_str(&content);
             fs::write(path, &existing).await?;
-            Ok(format!(r#"{{"status": "success", "writed_bytes": {}}}"#, content.len()))
+            Ok(format!(
+                r#"{{"status": "success", "writed_bytes": {}}}"#,
+                content.len()
+            ))
         }
         "prepend" => {
             let existing = if Path::new(path).exists() {
@@ -266,12 +310,18 @@ pub async fn file_write(args: &Value) -> Result<String> {
             };
             let new_content = format!("{}{}", content, existing);
             fs::write(path, &new_content).await?;
-            Ok(format!(r#"{{"status": "success", "writed_bytes": {}}}"#, content.len()))
+            Ok(format!(
+                r#"{{"status": "success", "writed_bytes": {}}}"#,
+                content.len()
+            ))
         }
         _ => {
             // overwrite
             fs::write(path, &content).await?;
-            Ok(format!(r#"{{"status": "success", "writed_bytes": {}}}"#, content.len()))
+            Ok(format!(
+                r#"{{"status": "success", "writed_bytes": {}}}"#,
+                content.len()
+            ))
         }
     }
 }

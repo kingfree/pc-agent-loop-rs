@@ -10,8 +10,11 @@ use tracing::debug;
 use crate::agent_loop::StepOutcome;
 use crate::handler::Handler;
 use crate::llm::MockResponse;
-use crate::tools::{code_run, file_patch, file_read, file_write};
 use crate::tools::file_ops::extract_file_content;
+use crate::tools::{code_run, file_patch, file_read, file_write};
+
+/// Type alias for the ask-user callback to avoid overly complex inline types.
+pub type AskUserCallback = Box<dyn Fn(&str) -> String + Send + Sync>;
 
 /// GenericAgentHandler: Implements all tool handlers.
 /// Mirrors Python's GenericAgentHandler / ga.py
@@ -22,7 +25,7 @@ pub struct GenericAgentHandler {
     pub related_sop: String,
     pub task_description: String,
     pub work_dir: String,
-    pub ask_user_callback: Option<Box<dyn Fn(&str) -> String + Send + Sync>>,
+    pub ask_user_callback: Option<AskUserCallback>,
 }
 
 impl GenericAgentHandler {
@@ -40,7 +43,9 @@ impl GenericAgentHandler {
 
     /// Resolve a relative path against work_dir.
     fn get_abs_path(&self, path: &str) -> String {
-        if path.is_empty() { return String::new(); }
+        if path.is_empty() {
+            return String::new();
+        }
         let p = std::path::Path::new(path);
         if p.is_absolute() {
             path.to_string()
@@ -63,7 +68,10 @@ impl GenericAgentHandler {
         if let Ok(insight_text) = std::fs::read_to_string(&insight_path) {
             let structure = std::fs::read_to_string(&structure_path).unwrap_or_default();
             prompt.push_str("\n[Memory]\n");
-            prompt.push_str(&format!("cwd = {} （用./引用）\n", base.join("temp").display()));
+            prompt.push_str(&format!(
+                "cwd = {} （用./引用）\n",
+                base.join("temp").display()
+            ));
             if !structure.is_empty() {
                 prompt.push_str(&structure);
                 prompt.push('\n');
@@ -78,9 +86,14 @@ impl GenericAgentHandler {
     /// Returns anchor prompt with history, key_info, and turn info.
     /// Matches Python's `_get_anchor_prompt` exactly.
     pub fn get_anchor_prompt(&self) -> String {
-        let history_slice: Vec<&str> = self.history_info.iter()
-            .rev().take(20).collect::<Vec<_>>()
-            .into_iter().rev()
+        let history_slice: Vec<&str> = self
+            .history_info
+            .iter()
+            .rev()
+            .take(20)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
             .map(|s| s.as_str())
             .collect();
         let h_str = history_slice.join("\n");
@@ -104,7 +117,8 @@ impl GenericAgentHandler {
         let escaped = regex::escape(code_type);
         let pattern = format!(r"(?s)```{}\n(.*?)\n```", escaped);
         if let Ok(re) = Regex::new(&pattern) {
-            let matches: Vec<String> = re.captures_iter(response_content)
+            let matches: Vec<String> = re
+                .captures_iter(response_content)
                 .map(|c| c[1].trim().to_string())
                 .collect();
             if !matches.is_empty() {
@@ -113,7 +127,8 @@ impl GenericAgentHandler {
         }
         // Also try plain ``` blocks
         if let Ok(re_plain) = Regex::new(r"(?s)```\n(.*?)\n```") {
-            let matches: Vec<String> = re_plain.captures_iter(response_content)
+            let matches: Vec<String> = re_plain
+                .captures_iter(response_content)
                 .map(|c| c[1].trim().to_string())
                 .collect();
             if !matches.is_empty() {
@@ -129,7 +144,8 @@ impl GenericAgentHandler {
         response: &MockResponse,
         tx: &UnboundedSender<String>,
     ) -> Result<StepOutcome> {
-        let code_type = args.get("type")
+        let code_type = args
+            .get("type")
             .or_else(|| args.get("language"))
             .and_then(|l| l.as_str())
             .unwrap_or("python");
@@ -139,8 +155,15 @@ impl GenericAgentHandler {
             Self::extract_code_from_response(&response.content, code_type)
         {
             (extracted, String::new())
-        } else if let Some(code_arg) = args.get("code").or_else(|| args.get("script")).and_then(|c| c.as_str()) {
-            (code_arg.to_string(), "\n下次要记得先在回复正文中提供代码块，而不是放在参数中".to_string())
+        } else if let Some(code_arg) = args
+            .get("code")
+            .or_else(|| args.get("script"))
+            .and_then(|c| c.as_str())
+        {
+            (
+                code_arg.to_string(),
+                "\n下次要记得先在回复正文中提供代码块，而不是放在参数中".to_string(),
+            )
         } else {
             return Ok(StepOutcome::next(None, format!(
                 "【系统错误】：你调用了 code_run，但未在先在回复正文中提供 ```{} 代码块。请重新输出代码并附带工具调用。",
@@ -164,7 +187,9 @@ impl GenericAgentHandler {
         let (output, exit_code) = code_run(&effective_args, tx).await?;
         let next_prompt = format!(
             "代码执行完毕，退出码: {}\n{}{}",
-            exit_code, warning, self.get_anchor_prompt()
+            exit_code,
+            warning,
+            self.get_anchor_prompt()
         );
         Ok(StepOutcome::next(Some(Value::String(output)), next_prompt))
     }
@@ -185,13 +210,17 @@ impl GenericAgentHandler {
 
         match file_read(&effective_args).await {
             Ok(content) => {
-                let show_linenos = args.get("show_linenos")
+                let show_linenos = args
+                    .get("show_linenos")
                     .or_else(|| args.get("show_line_numbers"))
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
 
                 let result_str = if show_linenos {
-                    format!("由于设置了show_linenos，以下返回信息为：(行号|)内容 。\n{}", content)
+                    format!(
+                        "由于设置了show_linenos，以下返回信息为：(行号|)内容 。\n{}",
+                        content
+                    )
                 } else {
                     content
                 };
@@ -200,10 +229,14 @@ impl GenericAgentHandler {
                 if abs_path.contains("memory") || abs_path.contains("sop") {
                     next_prompt.push_str("\n[SYSTEM TIPS] 正在读取记忆或SOP文件，若决定按sop执行请提取sop中的关键点（特别是靠后的）update working memory.");
                 }
-                Ok(StepOutcome::next(Some(Value::String(result_str)), next_prompt))
+                Ok(StepOutcome::next(
+                    Some(Value::String(result_str)),
+                    next_prompt,
+                ))
             }
-            Err(e) => Ok(StepOutcome::next(None,
-                format!("文件读取失败: {}\n{}", e, self.get_anchor_prompt())
+            Err(e) => Ok(StepOutcome::next(
+                None,
+                format!("文件读取失败: {}\n{}", e, self.get_anchor_prompt()),
             )),
         }
     }
@@ -225,10 +258,14 @@ impl GenericAgentHandler {
         match file_patch(&effective_args).await {
             Ok(msg) => {
                 let _ = tx.send(format!("\n{}\n", msg));
-                Ok(StepOutcome::next(Some(Value::String(msg)), self.get_anchor_prompt()))
+                Ok(StepOutcome::next(
+                    Some(Value::String(msg)),
+                    self.get_anchor_prompt(),
+                ))
             }
-            Err(e) => Ok(StepOutcome::next(None,
-                format!("文件修补失败: {}\n{}", e, self.get_anchor_prompt())
+            Err(e) => Ok(StepOutcome::next(
+                None,
+                format!("文件修补失败: {}\n{}", e, self.get_anchor_prompt()),
             )),
         }
     }
@@ -241,15 +278,20 @@ impl GenericAgentHandler {
     ) -> Result<StepOutcome> {
         let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
         let abs_path = self.get_abs_path(path);
-        let mode = args.get("mode").and_then(|m| m.as_str()).unwrap_or("overwrite");
+        let mode = args
+            .get("mode")
+            .and_then(|m| m.as_str())
+            .unwrap_or("overwrite");
 
         let action_str = match mode {
             "prepend" => "Prepending to",
             "append" => "Appending to",
             _ => "Overwriting",
         };
-        let basename = std::path::Path::new(&abs_path).file_name()
-            .and_then(|n| n.to_str()).unwrap_or(&abs_path);
+        let basename = std::path::Path::new(&abs_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&abs_path);
         let _ = tx.send(format!("[Action] {} file: {}\n", action_str, basename));
 
         // Extract content from response (Python behavior: look in response first, then args)
@@ -260,8 +302,10 @@ impl GenericAgentHandler {
         } else {
             let _ = tx.send("[Status] ❌ 失败: 未在回复中找到代码块内容\n".to_string());
             return Ok(StepOutcome::next(
-                Some(serde_json::json!({"status": "error", "msg": "No content found, if you want a blank, you should use code_run"})),
-                "\n".to_string()
+                Some(
+                    serde_json::json!({"status": "error", "msg": "No content found, if you want a blank, you should use code_run"}),
+                ),
+                "\n".to_string(),
             ));
         };
 
@@ -273,17 +317,21 @@ impl GenericAgentHandler {
 
         match file_write(&effective_args).await {
             Ok(_) => {
-                let _ = tx.send(format!("[Status] ✅ {} 成功 ({} bytes)\n", mode, content.len()));
+                let _ = tx.send(format!(
+                    "[Status] ✅ {} 成功 ({} bytes)\n",
+                    mode,
+                    content.len()
+                ));
                 Ok(StepOutcome::next(
                     Some(serde_json::json!({"status": "success", "writed_bytes": content.len()})),
-                    self.get_anchor_prompt()
+                    self.get_anchor_prompt(),
                 ))
             }
             Err(e) => {
                 let _ = tx.send(format!("[Status] ❌ 写入异常: {}\n", e));
                 Ok(StepOutcome::next(
                     Some(serde_json::json!({"status": "error", "msg": e.to_string()})),
-                    "\n".to_string()
+                    "\n".to_string(),
                 ))
             }
         }
@@ -312,8 +360,14 @@ impl GenericAgentHandler {
         args: &Value,
         tx: &UnboundedSender<String>,
     ) -> Result<StepOutcome> {
-        let tabs_only = args.get("tabs_only").and_then(|v| v.as_bool()).unwrap_or(false);
-        let switch_tab_id = args.get("switch_tab_id").and_then(|v| v.as_str()).unwrap_or("");
+        let tabs_only = args
+            .get("tabs_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let switch_tab_id = args
+            .get("switch_tab_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let _ = tx.send(format!("[web_scan] tabs_only={}\n", tabs_only));
 
         let extra = serde_json::json!({
@@ -325,21 +379,31 @@ impl GenericAgentHandler {
                 let result_str = serde_json::to_string(&result).unwrap_or_default();
                 // Print result without content field (like Python does)
                 let mut display = result.clone();
-                if let Some(obj) = display.as_object_mut() { obj.remove("content"); }
-                let _ = tx.send(format!("[Info] {}\n", serde_json::to_string(&display).unwrap_or_default()));
+                if let Some(obj) = display.as_object_mut() {
+                    obj.remove("content");
+                }
+                let _ = tx.send(format!(
+                    "[Info] {}\n",
+                    serde_json::to_string(&display).unwrap_or_default()
+                ));
 
-                let next_prompt = if let Some(content) = result.get("content").and_then(|c| c.as_str()) {
-                    format!("<tool_result>\n```html\n{}\n```\n</tool_result>", content)
-                } else {
-                    "标签页列表如上\n".to_string()
-                };
+                let next_prompt =
+                    if let Some(content) = result.get("content").and_then(|c| c.as_str()) {
+                        format!("<tool_result>\n```html\n{}\n```\n</tool_result>", content)
+                    } else {
+                        "标签页列表如上\n".to_string()
+                    };
                 let _ = result_str;
                 Ok(StepOutcome::next(Some(result), next_prompt))
             }
-            Err(e) => Ok(StepOutcome::next(None, format!(
-                "web_scan 失败 (TMWebDriver 未运行或不可达 http://localhost:18766): {}\n{}",
-                e, self.get_anchor_prompt()
-            ))),
+            Err(e) => Ok(StepOutcome::next(
+                None,
+                format!(
+                    "web_scan 失败 (TMWebDriver 未运行或不可达 http://localhost:18766): {}\n{}",
+                    e,
+                    self.get_anchor_prompt()
+                ),
+            )),
         }
     }
 
@@ -348,12 +412,16 @@ impl GenericAgentHandler {
         args: &Value,
         tx: &UnboundedSender<String>,
     ) -> Result<StepOutcome> {
-        let js = args.get("script").or_else(|| args.get("js"))
-            .and_then(|j| j.as_str()).unwrap_or("");
+        let js = args
+            .get("script")
+            .or_else(|| args.get("js"))
+            .and_then(|j| j.as_str())
+            .unwrap_or("");
 
         if js.is_empty() {
-            return Ok(StepOutcome::next(None,
-                "[Error] Empty script param. Check your tool call arguments.".to_string()
+            return Ok(StepOutcome::next(
+                None,
+                "[Error] Empty script param. Check your tool call arguments.".to_string(),
             ));
         }
 
@@ -365,12 +433,24 @@ impl GenericAgentHandler {
             js.to_string()
         };
 
-        let save_to_file = args.get("save_to_file").and_then(|v| v.as_str()).unwrap_or("");
-        let switch_tab_id = args.get("switch_tab_id").or_else(|| args.get("tab_id"))
-            .and_then(|v| v.as_str()).unwrap_or("");
-        let no_monitor = args.get("no_monitor").and_then(|v| v.as_bool()).unwrap_or(false);
+        let save_to_file = args
+            .get("save_to_file")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let switch_tab_id = args
+            .get("switch_tab_id")
+            .or_else(|| args.get("tab_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let no_monitor = args
+            .get("no_monitor")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-        let _ = tx.send(format!("[web_execute_js] JS: {}...\n", &script[..script.len().min(50)]));
+        let _ = tx.send(format!(
+            "[web_execute_js] JS: {}...\n",
+            &script[..script.len().min(50)]
+        ));
 
         let extra = serde_json::json!({
             "code": script,
@@ -387,10 +467,14 @@ impl GenericAgentHandler {
                         };
                         let save_path = self.get_abs_path(save_to_file);
                         let saved_msg = match std::fs::write(&save_path, &content) {
-                            Ok(_) => format!("{}\n\n[已保存完整内容到 {}]",
-                                &content[..content.len().min(170)], save_path),
-                            Err(_) => format!("{}\n\n[保存失败，无法写入文件 {}]",
-                                content, save_path),
+                            Ok(_) => format!(
+                                "{}\n\n[已保存完整内容到 {}]",
+                                &content[..content.len().min(170)],
+                                save_path
+                            ),
+                            Err(_) => {
+                                format!("{}\n\n[保存失败，无法写入文件 {}]", content, save_path)
+                            }
                         };
                         if let Some(obj) = result.as_object_mut() {
                             obj.insert("js_return".to_string(), Value::String(saved_msg));
@@ -398,14 +482,19 @@ impl GenericAgentHandler {
                     }
                 }
                 let result_str = serde_json::to_string_pretty(&result).unwrap_or_default();
-                let _ = tx.send(format!("JS 执行结果:\n{}\n",
-                    &result_str[..result_str.len().min(500)]));
+                let _ = tx.send(format!(
+                    "JS 执行结果:\n{}\n",
+                    &result_str[..result_str.len().min(500)]
+                ));
                 Ok(StepOutcome::next(Some(result), self.get_anchor_prompt()))
             }
-            Err(e) => Ok(StepOutcome::next(None, format!(
+            Err(e) => Ok(StepOutcome::next(
+                None,
+                format!(
                 "web_execute_js 失败 (TMWebDriver 未运行或不可达 http://localhost:18766): {}\n{}",
                 e, self.get_anchor_prompt()
-            ))),
+            ),
+            )),
         }
     }
 
@@ -414,11 +503,19 @@ impl GenericAgentHandler {
         args: &Value,
         tx: &UnboundedSender<String>,
     ) -> Result<StepOutcome> {
-        let question = args.get("question").or_else(|| args.get("msg"))
-            .and_then(|q| q.as_str()).unwrap_or("请输入:");
-        let candidates: Vec<String> = args.get("candidates")
+        let question = args
+            .get("question")
+            .or_else(|| args.get("msg"))
+            .and_then(|q| q.as_str())
+            .unwrap_or("请输入:");
+        let candidates: Vec<String> = args
+            .get("candidates")
             .and_then(|c| c.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let _ = tx.send(format!("\n**[ask_user]** {}\n", question));
@@ -459,7 +556,7 @@ impl GenericAgentHandler {
         debug!("Checkpoint updated: key_info={} chars", self.key_info.len());
         Ok(StepOutcome::next(
             Some(serde_json::json!({"status": "success"})),
-            self.get_anchor_prompt()
+            self.get_anchor_prompt(),
         ))
     }
 
@@ -483,7 +580,8 @@ impl GenericAgentHandler {
         );
 
         let sop_path = std::path::Path::new(&self.work_dir)
-            .join("memory").join("memory_management_sop.md");
+            .join("memory")
+            .join("memory_management_sop.md");
         let result = if sop_path.exists() {
             std::fs::read_to_string(&sop_path)
                 .map(Value::String)
@@ -508,7 +606,7 @@ impl GenericAgentHandler {
             let _ = tx.send("[Warn] LLM returned an empty response. Retrying...\n".to_string());
             return Ok(StepOutcome::next(
                 Some(serde_json::json!({})),
-                "[System] 回复为空，请重新生成内容或调用工具。".to_string()
+                "[System] 回复为空，请重新生成内容或调用工具。".to_string(),
             ));
         }
 
@@ -542,26 +640,41 @@ impl GenericAgentHandler {
 
     /// Log memory file accesses (mirrors Python's log_memory_access).
     fn log_memory_access(&self, path: &str) {
-        if !path.contains("memory") { return; }
+        if !path.contains("memory") {
+            return;
+        }
         let stats_file = std::path::Path::new(&self.work_dir)
-            .join("memory").join("file_access_stats.json");
+            .join("memory")
+            .join("file_access_stats.json");
         let mut stats: serde_json::Map<String, Value> = if stats_file.exists() {
             std::fs::read_to_string(&stats_file)
-                .ok().and_then(|s| serde_json::from_str(&s).ok())
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default()
         } else {
             serde_json::Map::new()
         };
-        let fname = std::path::Path::new(path).file_name()
-            .and_then(|n| n.to_str()).unwrap_or(path).to_string();
-        let old_count = stats.get(&fname)
-            .and_then(|v| v.get("count")).and_then(|c| c.as_u64()).unwrap_or(0);
-        stats.insert(fname, serde_json::json!({
-            "count": old_count + 1,
-            "last": Local::now().format("%Y-%m-%d").to_string()
-        }));
-        let _ = std::fs::write(&stats_file,
-            serde_json::to_string_pretty(&Value::Object(stats)).unwrap_or_default());
+        let fname = std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(path)
+            .to_string();
+        let old_count = stats
+            .get(&fname)
+            .and_then(|v| v.get("count"))
+            .and_then(|c| c.as_u64())
+            .unwrap_or(0);
+        stats.insert(
+            fname,
+            serde_json::json!({
+                "count": old_count + 1,
+                "last": Local::now().format("%Y-%m-%d").to_string()
+            }),
+        );
+        let _ = std::fs::write(
+            &stats_file,
+            serde_json::to_string_pretty(&Value::Object(stats)).unwrap_or_default(),
+        );
     }
 }
 
@@ -570,7 +683,11 @@ impl GenericAgentHandler {
 fn extract_content_from_response(text: &str) -> Option<String> {
     if let (Some(s), Some(e)) = (text.find("<file_content>"), text.rfind("</file_content>")) {
         if s < e {
-            return Some(text[s + "<file_content>".len()..e].trim_start_matches('\n').to_string());
+            return Some(
+                text[s + "<file_content>".len()..e]
+                    .trim_start_matches('\n')
+                    .to_string(),
+            );
         }
     }
     let s_pos = text.find("```");
@@ -593,18 +710,24 @@ impl Handler for GenericAgentHandler {
         self.current_turn = turn;
     }
 
-    fn next_prompt_patcher(&self, next_prompt: &str, _outcome: &StepOutcome, turn: usize) -> String {
+    fn next_prompt_patcher(
+        &self,
+        next_prompt: &str,
+        _outcome: &StepOutcome,
+        turn: usize,
+    ) -> String {
         let mut result = next_prompt.to_string();
-        if turn > 0 && turn % 30 == 0 {
+        if turn > 0 && turn.is_multiple_of(30) {
             result.push_str(&format!(
-                "\n\n[DANGER] 已连续执行第 {} 轮。你必须总结情况进行ask_user，不允许继续重试。", turn
+                "\n\n[DANGER] 已连续执行第 {} 轮。你必须总结情况进行ask_user，不允许继续重试。",
+                turn
             ));
-        } else if turn > 0 && turn % 7 == 0 {
+        } else if turn > 0 && turn.is_multiple_of(7) {
             result.push_str(&format!(
                 "\n\n[DANGER] 已连续执行第 {} 轮。禁止无效重试。若无有效进展，必须切换策略：1. 探测物理边界 2. 请求用户协助。如有需要，可调用 update_working_checkpoint 保存关键上下文。",
                 turn
             ));
-        } else if turn > 0 && turn % 10 == 0 {
+        } else if turn > 0 && turn.is_multiple_of(10) {
             result.push_str(&self.get_global_memory());
         }
         result
@@ -622,7 +745,8 @@ impl Handler for GenericAgentHandler {
         if let Some(cap) = summary_re.captures(&response.content) {
             let summary = &cap[1];
             let truncated = &summary[..summary.len().min(200)];
-            self.history_info.push(format!("[Agent] {}", truncated.trim()));
+            self.history_info
+                .push(format!("[Agent] {}", truncated.trim()));
         } else {
             // Auto-generate summary and add PROTOCOL_VIOLATION (matches Python exactly)
             let auto_summary = if tool_name == "no_tool" {
@@ -648,7 +772,8 @@ impl Handler for GenericAgentHandler {
         response: &MockResponse,
         tx: &UnboundedSender<String>,
     ) -> Result<StepOutcome> {
-        self.tool_before_callback(tool_name, args, response, tx).await?;
+        self.tool_before_callback(tool_name, args, response, tx)
+            .await?;
 
         let mut outcome = match tool_name {
             "code_run" | "run_code" | "execute_code" => {
@@ -668,7 +793,11 @@ impl Handler for GenericAgentHandler {
             }
             "no_tool" => self.do_no_tool(args, response, tx).await?,
             "bad_json" => {
-                let msg = args.get("msg").and_then(|m| m.as_str()).unwrap_or("bad_json").to_string();
+                let msg = args
+                    .get("msg")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("bad_json")
+                    .to_string();
                 let _ = tx.send(format!("[bad_json] {}\n", msg));
                 StepOutcome::next(None, msg)
             }
@@ -679,7 +808,8 @@ impl Handler for GenericAgentHandler {
             }
         };
 
-        self.tool_after_callback(tool_name, args, response, &mut outcome, tx).await?;
+        self.tool_after_callback(tool_name, args, response, &mut outcome, tx)
+            .await?;
         Ok(outcome)
     }
 }

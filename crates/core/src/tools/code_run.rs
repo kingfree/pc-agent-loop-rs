@@ -18,28 +18,30 @@ use tracing::debug;
 ///
 /// For Python/Lua/JS, writes to a temp file and runs it (proper multiline support).
 /// For bash/powershell, runs inline via shell.
-pub async fn code_run(
-    args: &Value,
-    tx: &UnboundedSender<String>,
-) -> Result<(String, i32)> {
+pub async fn code_run(args: &Value, tx: &UnboundedSender<String>) -> Result<(String, i32)> {
     // Support both "type" (Python original) and "language" (Rust alias)
-    let code_type = args.get("type")
+    let code_type = args
+        .get("type")
         .or_else(|| args.get("language"))
         .and_then(|l| l.as_str())
         .unwrap_or("python");
 
-    let code = args.get("code")
+    let code = args
+        .get("code")
         .or_else(|| args.get("script"))
         .and_then(|c| c.as_str())
         .unwrap_or("");
 
-    let timeout_secs = args.get("timeout")
-        .and_then(|t| t.as_u64())
-        .unwrap_or(60);
+    let timeout_secs = args.get("timeout").and_then(|t| t.as_u64()).unwrap_or(60);
 
     let cwd = args.get("cwd").and_then(|c| c.as_str());
 
-    debug!("code_run: type={}, code_len={}, cwd={:?}", code_type, code.len(), cwd);
+    debug!(
+        "code_run: type={}, code_len={}, cwd={:?}",
+        code_type,
+        code.len(),
+        cwd
+    );
 
     if code.is_empty() {
         return Ok(("No code provided".to_string(), 1));
@@ -48,25 +50,38 @@ pub async fn code_run(
     // Preview for logging
     let preview = {
         let s: String = code.chars().take(60).collect::<String>().replace('\n', " ");
-        if code.len() > 60 { format!("{}...", s) } else { s.trim().to_string() }
+        if code.len() > 60 {
+            format!("{}...", s)
+        } else {
+            s.trim().to_string()
+        }
     };
     let dir_name = cwd
-        .map(|d| Path::new(d).file_name().and_then(|n| n.to_str()).unwrap_or(d))
+        .map(|d| {
+            Path::new(d)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(d)
+        })
         .unwrap_or(".");
-    let _ = tx.send(format!("[Action] Running {} in {}: {}\n", code_type, dir_name, preview));
+    let _ = tx.send(format!(
+        "[Action] Running {} in {}: {}\n",
+        code_type, dir_name, preview
+    ));
 
     match code_type {
         "python" | "python3" | "py" => run_python(code, timeout_secs, cwd, tx).await,
-        "bash" | "shell" | "sh" => {
-            run_process("bash", &["-c", code], timeout_secs, cwd, tx).await
-        }
+        "bash" | "shell" | "sh" => run_process("bash", &["-c", code], timeout_secs, cwd, tx).await,
         "powershell" | "ps" => {
             if cfg!(windows) {
                 run_process(
                     "powershell",
                     &["-NoProfile", "-NonInteractive", "-Command", code],
-                    timeout_secs, cwd, tx,
-                ).await
+                    timeout_secs,
+                    cwd,
+                    tx,
+                )
+                .await
             } else {
                 run_process("bash", &["-c", code], timeout_secs, cwd, tx).await
             }
@@ -153,7 +168,9 @@ async fn run_lua_embedded(
         let tx_write = tx_clone.clone();
 
         match print_fn {
-            Ok(f) => { let _ = lua.globals().set("print", f); }
+            Ok(f) => {
+                let _ = lua.globals().set("print", f);
+            }
             Err(e) => return (format!("[lua error] {}\n", e), 1),
         }
 
@@ -236,14 +253,21 @@ async fn run_python(
     let tmp_path = tmp_dir.join(format!("pc_agent_{}.ai.py", uuid_short()));
     fs::write(&tmp_path, code).await?;
 
-    let python_cmd = if which_available("python3") { "python3" } else { "python" };
+    let python_cmd = if which_available("python3") {
+        "python3"
+    } else {
+        "python"
+    };
     let tmp_str = tmp_path.to_str().unwrap_or("script.ai.py");
 
     let result = run_process(
         python_cmd,
         &["-X", "utf8", "-u", tmp_str],
-        timeout_secs, cwd, tx,
-    ).await;
+        timeout_secs,
+        cwd,
+        tx,
+    )
+    .await;
 
     let _ = fs::remove_file(&tmp_path).await;
     result
@@ -263,8 +287,7 @@ async fn run_process(
     command.stderr(std::process::Stdio::piped());
 
     if let Some(dir) = cwd {
-        let abs = std::fs::canonicalize(dir)
-            .unwrap_or_else(|_| std::path::PathBuf::from(dir));
+        let abs = std::fs::canonicalize(dir).unwrap_or_else(|_| std::path::PathBuf::from(dir));
         command.current_dir(&abs);
     }
 
@@ -335,7 +358,10 @@ async fn run_process(
     let exit_code = exit_status.code().unwrap_or(-1);
 
     let status_icon = if exit_code == 0 { "✅" } else { "❌" };
-    let _ = tx.send(format!("[Status] {} Exit Code: {}\n", status_icon, exit_code));
+    let _ = tx.send(format!(
+        "[Status] {} Exit Code: {}\n",
+        status_icon, exit_code
+    ));
 
     Ok((full_output, exit_code))
 }

@@ -18,11 +18,12 @@ pub struct LLMSession {
 
 impl LLMSession {
     pub fn new(config: AppConfig) -> Result<Self> {
-        let oai = config.oai_config.as_ref()
+        let oai = config
+            .oai_config
+            .as_ref()
             .ok_or_else(|| anyhow!("oai_config is required for LLMSession"))?;
 
-        let mut client_builder = Client::builder()
-            .timeout(std::time::Duration::from_secs(120));
+        let mut client_builder = Client::builder().timeout(std::time::Duration::from_secs(120));
 
         if let Some(proxy_url) = &config.proxy {
             let proxy = reqwest::Proxy::all(proxy_url)?;
@@ -84,7 +85,8 @@ impl LLMSession {
     ) -> Result<String> {
         use futures::StreamExt;
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -113,7 +115,7 @@ impl LLMSession {
                 buffer = buffer[line_end + 1..].to_string();
 
                 if line.starts_with("data: ") {
-                    let data = &line["data: ".len()..];
+                    let data = line.strip_prefix("data: ").unwrap_or(&line);
                     if data == "[DONE]" {
                         break;
                     }
@@ -149,11 +151,12 @@ pub struct ClaudeSession {
 
 impl ClaudeSession {
     pub fn new(config: &AppConfig) -> Result<Self> {
-        let claude = config.claude_config.as_ref()
+        let claude = config
+            .claude_config
+            .as_ref()
             .ok_or_else(|| anyhow!("claude_config is required for ClaudeSession"))?;
 
-        let mut client_builder = Client::builder()
-            .timeout(std::time::Duration::from_secs(120));
+        let mut client_builder = Client::builder().timeout(std::time::Duration::from_secs(120));
 
         if let Some(proxy_url) = &config.proxy {
             let proxy = reqwest::Proxy::all(proxy_url)?;
@@ -208,7 +211,8 @@ impl ClaudeSession {
     ) -> Result<String> {
         use futures::StreamExt;
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
@@ -237,10 +241,12 @@ impl ClaudeSession {
                 buffer = buffer[line_end + 1..].to_string();
 
                 if line.starts_with("data: ") {
-                    let data = &line["data: ".len()..];
+                    let data = line.strip_prefix("data: ").unwrap_or(&line);
                     if let Ok(json_val) = serde_json::from_str::<Value>(data) {
                         // Claude streaming: content_block_delta events
-                        if json_val.get("type").and_then(|t| t.as_str()) == Some("content_block_delta") {
+                        if json_val.get("type").and_then(|t| t.as_str())
+                            == Some("content_block_delta")
+                        {
                             if let Some(text_delta) = json_val
                                 .get("delta")
                                 .and_then(|d| d.get("text"))
@@ -335,18 +341,33 @@ impl GeminiSession {
                 let abs_start = search_start + obj_start;
                 let mut depth = 0i32;
                 let mut end_pos = None;
-                let bytes = buffer[abs_start..].as_bytes();
+                let bytes = &buffer.as_bytes()[abs_start..];
                 let mut in_string = false;
                 let mut escape_next = false;
                 for (i, &b) in bytes.iter().enumerate() {
-                    if escape_next { escape_next = false; continue; }
-                    if b == b'\\' && in_string { escape_next = true; continue; }
-                    if b == b'"' { in_string = !in_string; continue; }
-                    if in_string { continue; }
-                    if b == b'{' { depth += 1; }
-                    else if b == b'}' {
+                    if escape_next {
+                        escape_next = false;
+                        continue;
+                    }
+                    if b == b'\\' && in_string {
+                        escape_next = true;
+                        continue;
+                    }
+                    if b == b'"' {
+                        in_string = !in_string;
+                        continue;
+                    }
+                    if in_string {
+                        continue;
+                    }
+                    if b == b'{' {
+                        depth += 1;
+                    } else if b == b'}' {
                         depth -= 1;
-                        if depth == 0 { end_pos = Some(abs_start + i + 1); break; }
+                        if depth == 0 {
+                            end_pos = Some(abs_start + i + 1);
+                            break;
+                        }
                     }
                 }
 

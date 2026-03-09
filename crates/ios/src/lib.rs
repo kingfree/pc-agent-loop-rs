@@ -56,9 +56,9 @@
 //! // print(result)
 //! ```
 
+use pc_agent_loop_core::AgentSession;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use pc_agent_loop_core::AgentSession;
 
 /// Opaque handle to AgentSession, exposed through C FFI.
 pub struct AgentSessionHandle(AgentSession);
@@ -76,9 +76,11 @@ pub extern "C" fn agent_session_create(
 ) -> *mut AgentSessionHandle {
     let result = std::panic::catch_unwind(|| -> anyhow::Result<*mut AgentSessionHandle> {
         // SAFETY: caller guarantees valid C strings
-        let config_str = unsafe { CStr::from_ptr(config_json) }.to_str()
+        let config_str = unsafe { CStr::from_ptr(config_json) }
+            .to_str()
             .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in config_json: {}", e))?;
-        let work_dir_str = unsafe { CStr::from_ptr(work_dir) }.to_str()
+        let work_dir_str = unsafe { CStr::from_ptr(work_dir) }
+            .to_str()
             .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in work_dir: {}", e))?;
 
         let session = AgentSession::new(config_str, work_dir_str)?;
@@ -105,36 +107,36 @@ pub extern "C" fn agent_session_run_task(
     task: *const c_char,
     max_turns: i32,
 ) -> *mut c_char {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> anyhow::Result<*mut c_char> {
-        if handle.is_null() {
-            return Err(anyhow::anyhow!("Null handle"));
-        }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<*mut c_char> {
+            if handle.is_null() {
+                return Err(anyhow::anyhow!("Null handle"));
+            }
 
-        // SAFETY: handle was created by agent_session_create using Box::into_raw
-        let session = unsafe { &mut (*handle).0 };
+            // SAFETY: handle was created by agent_session_create using Box::into_raw
+            let session = unsafe { &mut (*handle).0 };
 
-        let task_str = unsafe { CStr::from_ptr(task) }.to_str()
-            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in task: {}", e))?;
+            let task_str = unsafe { CStr::from_ptr(task) }
+                .to_str()
+                .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in task: {}", e))?;
 
-        let max_turns_usize = max_turns.max(1) as usize;
+            let max_turns_usize = max_turns.max(1) as usize;
 
-        // Build a single-threaded tokio runtime for blocking on the async function
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
+            // Build a single-threaded tokio runtime for blocking on the async function
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
 
-        let json_result = rt.block_on(session.run_task(
-            task_str,
-            max_turns_usize,
-            |_chunk| {
-                // Streaming not exposed through sync C FFI.
-                // For streaming support, use a callback-based variant.
-            },
-        ))?;
+            let json_result =
+                rt.block_on(session.run_task(task_str, max_turns_usize, |_chunk| {
+                    // Streaming not exposed through sync C FFI.
+                    // For streaming support, use a callback-based variant.
+                }))?;
 
-        let cstring = CString::new(json_result)?;
-        Ok(cstring.into_raw())
-    }));
+            let cstring = CString::new(json_result)?;
+            Ok(cstring.into_raw())
+        },
+    ));
 
     match result {
         Ok(Ok(ptr)) => ptr,

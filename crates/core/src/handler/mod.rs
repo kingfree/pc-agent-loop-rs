@@ -37,12 +37,7 @@ pub trait Handler: Send + Sync {
     }
 
     /// Optionally patch the next prompt before it's sent.
-    fn next_prompt_patcher(
-        &self,
-        next_prompt: &str,
-        outcome: &StepOutcome,
-        turn: usize,
-    ) -> String {
+    fn next_prompt_patcher(&self, next_prompt: &str, outcome: &StepOutcome, turn: usize) -> String {
         let _ = (outcome, turn);
         next_prompt.to_string()
     }

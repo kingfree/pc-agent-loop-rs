@@ -7,12 +7,17 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use pc_agent_loop_core::{agent_runner_loop, AgentResult, AppConfig, GenericAgentHandler, ToolClient};
 use pc_agent_loop_core::webdriver::TMWebDriver;
+use pc_agent_loop_core::{
+    agent_runner_loop, AgentResult, AppConfig, GenericAgentHandler, ToolClient,
+};
 
 /// CLI arguments
 #[derive(Parser, Debug)]
-#[command(name = "pc-agent-loop", about = "AI Agent Loop (Rust port of pc-agent-loop-py)")]
+#[command(
+    name = "pc-agent-loop",
+    about = "AI Agent Loop (Rust port of pc-agent-loop-py)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -74,7 +79,9 @@ fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
         vec![
             PathBuf::from("mykey.json"),
             PathBuf::from("./mykey.json"),
-            dirs_home().map(|h| h.join(".config/pc-agent/mykey.json")).unwrap_or_default(),
+            dirs_home()
+                .map(|h| h.join(".config/pc-agent/mykey.json"))
+                .unwrap_or_default(),
         ]
     };
 
@@ -98,7 +105,8 @@ fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
                 "model": "gpt-4o"
             },
             "proxy": "http://127.0.0.1:7890"
-        })).unwrap(),
+        }))
+        .unwrap(),
         paths_to_try
     ))
 }
@@ -236,7 +244,10 @@ fn load_global_memory(work_dir: &str) -> String {
     if let Ok(text) = std::fs::read_to_string(&insight) {
         let struct_text = std::fs::read_to_string(&structure).unwrap_or_default();
         result.push_str("\n[Memory]\n");
-        result.push_str(&format!("cwd = {} （用./引用）\n", base.join("temp").display()));
+        result.push_str(&format!(
+            "cwd = {} （用./引用）\n",
+            base.join("temp").display()
+        ));
         if !struct_text.is_empty() {
             result.push_str(&struct_text);
             result.push('\n');
@@ -359,11 +370,17 @@ impl GeneraticAgent {
 
         let result_str = match &result {
             AgentResult::CurrentTaskDone(Some(data)) => {
-                format!("DONE\n{}", serde_json::to_string_pretty(data).unwrap_or_default())
+                format!(
+                    "DONE\n{}",
+                    serde_json::to_string_pretty(data).unwrap_or_default()
+                )
             }
             AgentResult::CurrentTaskDone(None) => "DONE".to_string(),
             AgentResult::Exited(Some(data)) => {
-                format!("EXITED\n{}", serde_json::to_string_pretty(data).unwrap_or_default())
+                format!(
+                    "EXITED\n{}",
+                    serde_json::to_string_pretty(data).unwrap_or_default()
+                )
             }
             AgentResult::Exited(None) => "EXITED".to_string(),
             AgentResult::MaxTurnsExceeded => "MAX_TURNS_EXCEEDED".to_string(),
@@ -460,7 +477,9 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Scheduled { tasks_file }) => {
             // Scheduled mode: watch for task files
-            let tasks_file = tasks_file.clone().unwrap_or_else(|| PathBuf::from("tasks.json"));
+            let tasks_file = tasks_file
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("tasks.json"));
             run_scheduled_mode(&agent, &tasks_file).await?;
         }
         Some(Commands::Webdriver { .. }) => {
@@ -512,7 +531,8 @@ async fn run_scheduled_mode(agent: &GeneraticAgent, tasks_file: &Path) -> Result
         };
 
         for task in tasks {
-            let task_str = match task.get("task")
+            let task_str = match task
+                .get("task")
                 .or_else(|| task.get("description"))
                 .and_then(|t| t.as_str())
             {
@@ -520,7 +540,8 @@ async fn run_scheduled_mode(agent: &GeneraticAgent, tasks_file: &Path) -> Result
                 None => continue,
             };
 
-            let status = task.get("status")
+            let status = task
+                .get("status")
                 .and_then(|s| s.as_str())
                 .unwrap_or("pending");
 

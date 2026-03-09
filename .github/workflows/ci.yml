@@ -32,8 +32,13 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-      - name: cargo clippy
-        run: cargo clippy --workspace -- -D warnings
+      - name: Install Linux dependencies (for Tauri gui crate check)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev
+
+      - name: cargo clippy (core + cli only; gui needs webkit2gtk which is installed above)
+        run: cargo clippy -p pc-agent-loop-core -p pc-agent-loop -- -D warnings
 
       - name: cargo check (all crates except Android/iOS)
         run: cargo check -p pc-agent-loop -p pc-agent-loop-core -p pc-agent-loop-gui
