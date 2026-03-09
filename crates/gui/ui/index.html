@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Cowork Agent</title>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    body { background: #1e1e2e; color: #cdd6f4; font-family: monospace; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+    #sidebar { width: 220px; background: #181825; padding: 16px; border-right: 1px solid #313244; display: flex; flex-direction: column; gap: 12px; flex-shrink: 0; }
+    #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { border-radius: 8px; padding: 12px; max-width: 90%; white-space: pre-wrap; line-height: 1.5; word-break: break-word; }
+    .user { background: #313244; align-self: flex-end; color: #cdd6f4; }
+    .agent { background: #1e1e2e; border: 1px solid #313244; align-self: flex-start; color: #cdd6f4; }
+    .agent pre { background: #11111b; padding: 8px; border-radius: 4px; overflow-x: auto; margin: 4px 0; }
+    .agent code.inline { background: #313244; padding: 2px 4px; border-radius: 3px; font-size: 13px; }
+    #input-area { padding: 16px; border-top: 1px solid #313244; display: flex; gap: 8px; flex-shrink: 0; }
+    #input { flex: 1; background: #313244; border: 1px solid #45475a; color: #cdd6f4; padding: 10px; border-radius: 6px; font-size: 14px; font-family: monospace; resize: none; height: 60px; outline: none; }
+    #input:focus { border-color: #89b4fa; }
+    button { background: #89b4fa; color: #1e1e2e; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; font-family: monospace; font-size: 13px; }
+    button:hover:not(:disabled) { background: #74c7ec; }
+    button.danger { background: #f38ba8; }
+    button.danger:hover:not(:disabled) { background: #eba0ac; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status { font-size: 12px; color: #6c7086; }
+    .status.running { color: #a6e3a1; }
+    h3 { color: #cba6f7; margin: 0; font-size: 14px; }
+    hr { border: none; border-top: 1px solid #313244; margin: 4px 0; }
+    #turn-info { font-size: 12px; color: #6c7086; }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h3>&#x1F5A5; Cowork Agent</h3>
+    <div class="status" id="llm-name">LLM: ...</div>
+    <div class="status" id="status-text">&#x25CF; 空闲</div>
+    <button onclick="switchLlm()">切换 LLM</button>
+    <button class="danger" onclick="abortTask()" id="abort-btn" disabled>&#x23F9; 中止任务</button>
+    <hr>
+    <div id="turn-info">Turn: 0</div>
+  </div>
+  <div id="main">
+    <div id="messages"></div>
+    <div id="input-area">
+      <textarea id="input" placeholder="输入任务... (Ctrl+Enter 发送)"></textarea>
+      <button onclick="sendTask()" id="send-btn">发送</button>
+    </div>
+  </div>
+
+  <script>
+    // Tauri v2 IPC API
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+
+    let isRunning = false;
+    let unlistenChunk = null;
+    let unlistenDone = null;
+
+    // Poll status every 2s
+    async function pollStatus() {
+      try {
+        const s = await invoke('get_status');
+        document.getElementById('llm-name').textContent = 'LLM: ' + (s.llm_name || '?');
+        document.getElementById('turn-info').textContent = 'Turn: ' + (s.current_turn || 0);
+      } catch (_) {}
+    }
+    setInterval(pollStatus, 2000);
+    pollStatus();
+
+    function renderMarkdown(text) {
+      let html = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, _lang, code) =>
+        '<pre><code>' + code + '</code></pre>');
+      html = html.replace(/`([^`\n]+)`/g, '<code class="inline">$1</code>');
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+
+      const parts = html.split(/(<pre>[\s\S]*?<\/pre>)/);
+      html = parts.map((part, i) => i % 2 === 0 ? part.replace(/\n/g, '<br>') : part).join('');
+      return html;
+    }
+
+    function appendMessage(role, text) {
+      const msgs = document.getElementById('messages');
+      const div = document.createElement('div');
+      div.className = 'msg ' + role;
+      if (role === 'agent') {
+        div.innerHTML = renderMarkdown(text);
+      } else {
+        div.textContent = text;
+      }
+      msgs.appendChild(div);
+      msgs.scrollTop = msgs.scrollHeight;
+      return div;
+    }
+
+    function updateAgentMessage(div, text) {
+      div.innerHTML = renderMarkdown(text);
+      const msgs = document.getElementById('messages');
+      msgs.scrollTop = msgs.scrollHeight;
+    }
+
+    function setRunning(running) {
+      isRunning = running;
+      document.getElementById('send-btn').disabled = running;
+      document.getElementById('abort-btn').disabled = !running;
+      const statusEl = document.getElementById('status-text');
+      statusEl.textContent = running ? '\u23F3 运行中...' : '\u25CF 空闲';
+      statusEl.className = running ? 'status running' : 'status';
+    }
+
+    async function cleanupListeners() {
+      if (unlistenChunk) { unlistenChunk(); unlistenChunk = null; }
+      if (unlistenDone)  { unlistenDone();  unlistenDone = null; }
+    }
+
+    async function sendTask() {
+      const input = document.getElementById('input');
+      const query = input.value.trim();
+      if (!query || isRunning) return;
+
+      input.value = '';
+      appendMessage('user', query);
+      setRunning(true);
+
+      let agentDiv = appendMessage('agent', '\u23F3 启动中...');
+      let agentText = '';
+
+      await cleanupListeners();
+
+      unlistenChunk = await listen('agent-chunk', (event) => {
+        agentText += event.payload;
+        updateAgentMessage(agentDiv, agentText);
+      });
+
+      unlistenDone = await listen('agent-done', () => {
+        setRunning(false);
+        cleanupListeners();
+      });
+
+      try {
+        await invoke('run_task', { query });
+      } catch (err) {
+        updateAgentMessage(agentDiv, 'Error: ' + err);
+        setRunning(false);
+        cleanupListeners();
+      }
+    }
+
+    async function abortTask() {
+      try { await invoke('abort_task'); } catch (_) {}
+    }
+
+    async function switchLlm() {
+      try {
+        const name = await invoke('switch_llm');
+        document.getElementById('llm-name').textContent = 'LLM: ' + name;
+      } catch (_) {}
+    }
+
+    document.getElementById('input').addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.key === 'Enter') sendTask();
+    });
+  </script>
+</body>
+</html>

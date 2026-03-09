@@ -8,18 +8,13 @@ license.workspace = true
 name = "pc-agent-loop-gui"
 path = "src/main.rs"
 
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
 [dependencies]
 pc-agent-loop-core = { path = "../core" }
+tauri = { version = "2" }
 tokio.workspace = true
-anyhow.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-axum = { workspace = true, features = ["ws"] }
-tower-http = { workspace = true, features = ["fs", "cors"] }
-tokio-stream.workspace = true
-async-stream.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-uuid.workspace = true
-clap = { workspace = true, features = ["derive"] }
-futures.workspace = true
+anyhow.workspace = true

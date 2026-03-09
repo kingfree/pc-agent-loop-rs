@@ -10,9 +10,9 @@ permissions:
   contents: write
 
 jobs:
-  # ── Desktop: Linux, macOS, Windows ──────────────────────────────────────
-  build-desktop:
-    name: Build ${{ matrix.target }}
+  # ── CLI: Linux, macOS, Windows ───────────────────────────────────────────
+  build-cli:
+    name: CLI ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -70,50 +70,88 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
+          key: ${{ runner.os }}-${{ matrix.target }}-cli-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.target }}-cli-
 
       - name: Build CLI
-        run: >
-          cargo build --release --target ${{ matrix.target }}
-          -p pc-agent-loop
-
-      - name: Build GUI
-        # GUI builds on all desktop platforms
-        run: >
-          cargo build --release --target ${{ matrix.target }}
-          -p pc-agent-loop-gui
-        continue-on-error: true  # GUI might have extra deps; don't block release
+        run: cargo build --release --target ${{ matrix.target }} -p pc-agent-loop
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
-          STAGING="staging"
-          mkdir -p "$STAGING"
-          cp target/${{ matrix.target }}/release/${{ matrix.artifact }} "$STAGING/"
-          # Include GUI binary if built
-          GUI_BIN="target/${{ matrix.target }}/release/pc-agent-loop-gui"
-          [ -f "$GUI_BIN" ] && cp "$GUI_BIN" "$STAGING/"
-          cp README.md LICENSE "$STAGING/"
-          tar -czf ${{ matrix.archive }} -C "$STAGING" .
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact }} staging/
+          cp README.md LICENSE staging/
+          tar -czf ${{ matrix.archive }} -C staging .
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $staging = "staging"
-          New-Item -ItemType Directory -Force $staging | Out-Null
-          Copy-Item "target\${{ matrix.target }}\release\${{ matrix.artifact }}" $staging
-          $gui = "target\${{ matrix.target }}\release\pc-agent-loop-gui.exe"
-          if (Test-Path $gui) { Copy-Item $gui $staging }
-          Copy-Item README.md, LICENSE $staging
-          Compress-Archive -Path "$staging\*" -DestinationPath ${{ matrix.archive }}
+          New-Item -ItemType Directory -Force staging | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\${{ matrix.artifact }}" staging
+          Copy-Item README.md, LICENSE staging
+          Compress-Archive -Path "staging\*" -DestinationPath ${{ matrix.archive }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
+
+  # ── GUI (Tauri): Linux, macOS, Windows ───────────────────────────────────
+  build-gui:
+    name: GUI (Tauri) ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: macos-14
+          - os: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-tauri-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-tauri-
+
+      - name: Build and bundle Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/gui
+          # Only upload to Release when triggered by a tag
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('pc-agent-loop-rs {0}', github.ref_name) || '' }}
+          releaseBody: |
+            Cowork Agent — Tauri desktop app bundle.
+            See the full release notes below.
+          releaseDraft: false
+          prerelease: false
 
   # ── Android: arm64-v8a, x86_64 ──────────────────────────────────────────
   build-android:
@@ -160,7 +198,6 @@ jobs:
       - name: Package Android
         run: |
           tar -czf pc-agent-loop-android-jniLibs.tar.gz jniLibs/
-          echo "Contents:"
           find jniLibs -name "*.so"
 
       - name: Upload artifact
@@ -169,10 +206,10 @@ jobs:
           name: pc-agent-loop-android-jniLibs.tar.gz
           path: pc-agent-loop-android-jniLibs.tar.gz
 
-  # ── Create GitHub Release ────────────────────────────────────────────────
+  # ── Create GitHub Release (CLI + Android artifacts) ──────────────────────
   release:
     name: Create Release
-    needs: [build-desktop, build-android]
+    needs: [build-cli, build-android]
     runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/')
 
@@ -196,9 +233,7 @@ jobs:
           body: |
             ## pc-agent-loop-rs ${{ github.ref_name }}
 
-            Prebuilt binaries for all platforms.
-
-            ### Downloads
+            ### CLI Downloads (single binary, no runtime needed)
 
             | Platform | File |
             |----------|------|
@@ -207,11 +242,17 @@ jobs:
             | macOS Apple Silicon | `pc-agent-loop-macos-aarch64.tar.gz` |
             | macOS Intel | `pc-agent-loop-macos-x86_64.tar.gz` |
             | Windows x86_64 | `pc-agent-loop-windows-x86_64.zip` |
-            | Android JNI (.so) | `pc-agent-loop-android-jniLibs.tar.gz` |
 
-            ### Quick Start
+            ### GUI (Tauri desktop app)
+            Installers are listed separately above: `.msi` (Windows), `.dmg` (macOS), `.AppImage`/`.deb` (Linux).
+
+            ### Android JNI
+            | File |
+            |------|
+            | `pc-agent-loop-android-jniLibs.tar.gz` |
+
+            ### Quick Start (CLI)
             ```bash
-            # Extract and run (Linux/macOS)
             tar -xzf pc-agent-loop-linux-x86_64.tar.gz
             echo '{"oai_config":{"apikey":"sk-...","apibase":"https://api.openai.com","model":"gpt-4o"}}' > mykey.json
             ./pc-agent-loop
