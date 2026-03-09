@@ -23,12 +23,13 @@ pub trait Handler: Send + Sync {
     }
 
     /// Called after a tool method returns.
+    /// `outcome` is mutable so callbacks can patch `next_prompt` (e.g., PROTOCOL_VIOLATION).
     async fn tool_after_callback(
         &mut self,
         tool_name: &str,
         args: &Value,
         response: &MockResponse,
-        outcome: &StepOutcome,
+        outcome: &mut StepOutcome,
         tx: &UnboundedSender<String>,
     ) -> Result<()> {
         let _ = (tool_name, args, response, outcome, tx);

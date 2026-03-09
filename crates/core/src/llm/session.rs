@@ -260,3 +260,124 @@ impl ClaudeSession {
         Ok(full_text)
     }
 }
+
+/// Google Gemini API session
+pub struct GeminiSession {
+    pub api_key: String,
+    pub model: String,
+    pub api_base: String,
+}
+
+impl GeminiSession {
+    pub fn new(api_key: String, model: String) -> Self {
+        GeminiSession {
+            api_key,
+            model,
+            api_base: "https://generativelanguage.googleapis.com/v1".to_string(),
+        }
+    }
+
+    pub async fn stream_completion(
+        &self,
+        prompt: &str,
+        tx: &UnboundedSender<String>,
+    ) -> Result<String> {
+        use futures::StreamExt;
+
+        let url = format!(
+            "{}/models/{}:streamGenerateContent?key={}",
+            self.api_base, self.model, self.api_key
+        );
+
+        let body = serde_json::json!({
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}]
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": 4096,
+                "temperature": 0.7
+            }
+        });
+
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()?;
+
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Gemini API error {}: {}", status, text));
+        }
+
+        let mut stream = resp.bytes_stream();
+        let mut full_text = String::new();
+        let mut buffer = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
+
+            // Gemini returns a JSON array streamed in chunks; parse complete objects.
+            // Each chunk: {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}
+            let mut search_start = 0;
+            while let Some(obj_start) = buffer[search_start..].find('{') {
+                let abs_start = search_start + obj_start;
+                let mut depth = 0i32;
+                let mut end_pos = None;
+                let bytes = buffer[abs_start..].as_bytes();
+                let mut in_string = false;
+                let mut escape_next = false;
+                for (i, &b) in bytes.iter().enumerate() {
+                    if escape_next { escape_next = false; continue; }
+                    if b == b'\\' && in_string { escape_next = true; continue; }
+                    if b == b'"' { in_string = !in_string; continue; }
+                    if in_string { continue; }
+                    if b == b'{' { depth += 1; }
+                    else if b == b'}' {
+                        depth -= 1;
+                        if depth == 0 { end_pos = Some(abs_start + i + 1); break; }
+                    }
+                }
+
+                if let Some(end) = end_pos {
+                    let obj_str = &buffer[abs_start..end];
+                    if let Ok(json_val) = serde_json::from_str::<Value>(obj_str) {
+                        if let Some(text_part) = json_val
+                            .get("candidates")
+                            .and_then(|c| c.get(0))
+                            .and_then(|c| c.get("content"))
+                            .and_then(|c| c.get("parts"))
+                            .and_then(|p| p.get(0))
+                            .and_then(|p| p.get("text"))
+                            .and_then(|t| t.as_str())
+                        {
+                            full_text.push_str(text_part);
+                            let _ = tx.send(text_part.to_string());
+                        }
+                    }
+                    search_start = end;
+                } else {
+                    break;
+                }
+            }
+
+            if search_start > 0 {
+                buffer = buffer[search_start..].to_string();
+            }
+        }
+
+        debug!("Gemini response complete, {} chars", full_text.len());
+        Ok(full_text)
+    }
+}

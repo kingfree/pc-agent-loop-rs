@@ -1,0 +1,15 @@
+[package]
+name = "pc-agent-loop-ios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "pc_agent_loop_ios"
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+pc-agent-loop-core = { path = "../core" }
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true

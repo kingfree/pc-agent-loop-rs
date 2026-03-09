@@ -1,0 +1,19 @@
+[package]
+name = "pc-agent-loop-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "pc_agent_loop_android"
+crate-type = ["cdylib"]
+
+[dependencies]
+pc-agent-loop-core = { path = "../core" }
+jni = "0.21"
+tokio.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.14"
